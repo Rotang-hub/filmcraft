@@ -1129,11 +1129,16 @@ pub(crate) fn clip_peaks(s: &Session, clips: &[filmcraft_project::ClipId]) -> Ve
 }
 
 fn gain_targets(s: &Session, p: &Value) -> Vec<filmcraft_project::ClipId> {
-    let sel: Vec<filmcraft_project::ClipId> = match p.get("clips").and_then(Value::as_array) {
-        Some(a) => a.iter().filter_map(|v| v.as_u64().map(filmcraft_project::ClipId)).collect(),
+    match p.get("clips").and_then(Value::as_array) {
+        Some(a) => {
+            let sel: Vec<filmcraft_project::ClipId> = a.iter().filter_map(|v| v.as_u64().map(filmcraft_project::ClipId)).collect();
+            crate::commands::with_links(s, &sel)
+        }
+        // Fork fix: like Premiere, Audio Gain changes the selected clips only. A click with Linked
+        // Selection on already selects the linked partners; an Alt+click selects one clip, and
+        // re-adding its partners here gave every linked track the same gain.
         None => s.state.selection.clone(),
-    };
-    crate::commands::with_links(s, &sel)
+    }
 }
 
 /// `clip.audioPeak`: the peak amplitude of the selection (with its current clip gain), as the Audio

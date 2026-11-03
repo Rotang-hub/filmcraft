@@ -60,6 +60,8 @@ pub mod sync;
 pub mod transcript;
 pub mod trim;
 pub mod voiceover;
+// Fork feature: Track Views panel (show/hear only chosen tracks).
+pub mod track_views;
 
 use std::sync::Arc;
 

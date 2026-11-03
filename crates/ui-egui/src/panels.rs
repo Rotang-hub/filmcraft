@@ -33,6 +33,7 @@ pub mod monitor_view;
 pub mod motion_path;
 pub mod multicam;
 pub mod notes;
+// Fork feature: Track Views panel.
 pub mod panel_state;
 pub mod presets;
 pub mod project;
@@ -52,6 +53,7 @@ pub mod timeline_captions;
 pub mod timeline_hit;
 pub mod timeline_volume;
 pub mod tools;
+pub mod track_views;
 pub mod transform_handles;
 pub mod transition_controls;
 pub mod trim_monitor;
@@ -167,6 +169,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
         PanelKind::EssentialSound => essential_sound::show(app, ui, rect),
         PanelKind::TextToSpeech => tts::show(app, ui, rect),
         PanelKind::ProjectNotes => notes::show(app, ui, rect),
+        PanelKind::TrackViews => track_views::show(app, ui, rect),
         other => crate::dock::placeholder(ui, rect, &app.tokens, &tlf!("{panel} — coming in a later milestone", panel = crate::i18n::t(other.title()))),
     }
 }

@@ -241,7 +241,9 @@ impl Default for TimelineView {
             thumbnail_mode: ThumbnailMode::Head,
             show_waveforms: true,
             show_video_names: true,
-            show_audio_names: true,
+            // Fork change: audio clip names start hidden so they don't cover the waveforms
+            // (the wrench menu's Show Audio Names still turns them on).
+            show_audio_names: false,
             follow: true,
             fit_pending: true,
             seen_playhead: None,

@@ -3690,3 +3690,27 @@
 	Previous	이전
 	Next	다음
 	Enter a valid HH:MM:SS:FF timecode	올바른 HH:MM:SS:FF 타임코드를 입력하세요
+
+# Fork feature: Track Views panel (crates/ui-egui/src/panels/track_views.rs).
+	Track Views	트랙 보기
+	Apply Track View	트랙 보기 적용
+	Get Track View	트랙 보기 가져오기
+	Open a sequence to use track views.	트랙 보기를 쓰려면 시퀀스를 여세요.
+	No tracks assigned yet: open Setup below.	아직 할당된 트랙이 없습니다. 아래 설정을 여세요.
+	Show {video} · Hear {audio}	보기: {video} · 듣기: {audio}
+	Track View {n}	트랙 보기 {n}
+	Show and hear every track	모든 트랙 보기·듣기
+	Show All Tracks	모든 트랙 표시
+	Now: show {video} · hear {audio}	현재: 보기 {video} · 듣기 {audio}
+	▾ Setup	▾ 설정
+	▸ Setup	▸ 설정
+	Setup	설정
+	Button:	버튼:
+	optional	선택 사항
+	Video (show)	비디오 (보기)
+	Audio (hear)	오디오 (듣기)
+	Use current tracks	현재 트랙으로 지정
+	Assign the tracks that are shown and heard now	지금 보이고 들리는 트랙을 이 버튼에 할당합니다
+	Also assigned (not in this sequence): {tracks}	이 시퀀스에 없는 할당 트랙: {tracks}
+	This sequence has no {tracks}; the other tracks of the view were applied.	이 시퀀스에는 {tracks} 트랙이 없어 나머지 트랙만 적용했습니다.
+	none	없음

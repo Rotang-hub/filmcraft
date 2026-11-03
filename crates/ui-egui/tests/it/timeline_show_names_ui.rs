@@ -65,6 +65,8 @@ fn texts(d: &Driver) -> Vec<String> {
 #[test]
 fn the_name_toggles_hide_the_clip_names_of_video_or_audio_tracks() {
     let mut d = Driver::demo();
+    // fork: audio names start hidden; this test starts from both shown
+    d.ok("ui.set", json!({"timeline": {"showAudioNames": true}}));
     // the demo's linked clips share a name: give the audio one its own, so each toggle is seen alone
     let (video, audio_clip) = {
         let q = d.harness.state().session.active_sequence().unwrap();
@@ -101,6 +103,8 @@ fn a_hidden_name_keeps_the_speed_label() {
 #[test]
 fn the_timeline_panel_menu_has_the_name_toggles() {
     let mut d = Driver::demo();
+    // fork: audio names start hidden; this test starts from both shown
+    d.ok("ui.set", json!({"timeline": {"showAudioNames": true}}));
     for (id, video) in [("panel.menu.Timeline.videoNames", true), ("panel.menu.Timeline.audioNames", false)] {
         d.ok("ui.click", json!({"id": "panel.menu.Timeline"}));
         d.ok("ui.click", json!({"id": id}));
