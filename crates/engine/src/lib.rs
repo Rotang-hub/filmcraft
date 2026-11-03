@@ -62,6 +62,8 @@ pub mod trim;
 pub mod voiceover;
 // Fork feature: Track Views panel (show/hear only chosen tracks).
 pub mod track_views;
+// Fork feature: fade handles on clip corners.
+pub mod fade_handles;
 
 use std::sync::Arc;
 

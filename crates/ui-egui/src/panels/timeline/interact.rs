@@ -1152,6 +1152,11 @@ pub(super) fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
     let rate = seq.settings.frame_rate;
     let roll_ripple = app.session.prefs.trim.selection_tool_roll_ripple;
 
+    // fork: the fade handles at the clips' top corners take the pointer first
+    if super::fade_handles::interact(app, ui, seq, layout) {
+        return;
+    }
+
     // ---- what the button went down on (#259): kept from the press frame until it comes up
     if ctx.input(|i| !i.pointer.any_down() && !i.pointer.any_released()) {
         app.tl.pressed = None;

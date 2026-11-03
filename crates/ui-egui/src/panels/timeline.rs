@@ -27,6 +27,8 @@ use super::timeline_hit::{EDGE_PX, EdgeKind, Grab, edge_geometry, grab_at, marke
 pub use super::timeline_hit::{Hit, ROLL_PX, hit, selection_trim_kind};
 
 mod clips;
+// Fork feature: fade handles on clip corners.
+mod fade_handles;
 mod headers;
 mod interact;
 mod layout;
@@ -771,7 +773,10 @@ fn paint_track_edits(
             let x1 = layout.x_of(end);
             let tr_rect = Rect::from_min_max(pos2(x0, super::timeline_hit::transition_top(r.rect)), pos2(x1, r.rect.max.y - 1.0));
             let selected = app.session.state.transition_selection.contains(&trn.id);
-            draw_transition(&p, tr_rect, trn, ghost || selected, &t);
+            // fork: a fade (one-sided transition) is drawn as Premiere draws one
+            if !fade_handles::draw_fade(&p, r.rect, tr_rect, trn, ghost || selected, &t) {
+                draw_transition(&p, tr_rect, trn, ghost || selected, &t);
+            }
             let suffix = if ghost { ".copy" } else { "" };
             app.auto.add(&format!("timeline.transition.{}{}", trn.id.0, suffix), tr_rect, &trn.effect.effect);
             // its ends, for dragging the duration (the same zones as the hit test)

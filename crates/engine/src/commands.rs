@@ -4057,6 +4057,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::paste_media::commands());
     // Fork feature: Track Views.
     v.extend(crate::track_views::commands());
+    // Fork feature: fade handles.
+    v.extend(crate::fade_handles::commands());
     // Edit ▸ Label ▸ <colour>, Paste Attributes, subclips, Video / Audio Options, Replace With Clip…
     // and their menu order
     crate::clip_ops::apply_layout(&mut v);

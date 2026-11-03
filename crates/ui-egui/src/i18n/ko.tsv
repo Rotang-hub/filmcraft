@@ -3714,3 +3714,9 @@
 	Also assigned (not in this sequence): {tracks}	이 시퀀스에 없는 할당 트랙: {tracks}
 	This sequence has no {tracks}; the other tracks of the view were applied.	이 시퀀스에는 {tracks} 트랙이 없어 나머지 트랙만 적용했습니다.
 	none	없음
+# Fork feature: fade handles (crates/ui-egui/src/panels/timeline/fade_handles.rs).
+	Fade {time}	페이드 {time}
+	No fade	페이드 없음
+	Fade in	페이드 인
+	Fade out	페이드 아웃
+	Set Fade	페이드 설정
