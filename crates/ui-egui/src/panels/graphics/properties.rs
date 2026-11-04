@@ -819,7 +819,8 @@ pub fn properties(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             p["begin"] = json!(begun != press);
             wrote = true;
         }
-        if let Err(e) = app.session.execute(&cmd, p) {
+        // fork: a layer property change goes to the same layer of every selected graphic
+        if let Err(e) = crate::panels::multi_edit::execute(&mut app.session, &cmd, p) {
             app.ui.status = e.to_string();
         }
     }

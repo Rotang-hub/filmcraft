@@ -301,7 +301,8 @@ fn browse(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let _ = route(app, &ctx, "graphics.template.install", &json!({}));
     }
     for (cmd, p) in actions {
-        match app.session.execute(&cmd, p) {
+        // fork: a property change goes to every selected caption made from a template
+        match crate::panels::multi_edit::execute(&mut app.session, &cmd, p) {
             Ok(v) => {
                 if cmd == "graphics.template.apply" {
                     // edit the new graphic's properties

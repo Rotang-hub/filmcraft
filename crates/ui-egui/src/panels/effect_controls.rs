@@ -1287,7 +1287,8 @@ pub(crate) fn run(app: &mut FilmcraftApp, ctx: &egui::Context, actions: Vec<(Str
             p["begin"] = json!(begun != press && !wrote);
             wrote = true;
         }
-        if let Err(e) = app.session.execute(&cmd, p) {
+        // fork: the change goes to every selected clip that has the property
+        if let Err(e) = crate::panels::multi_edit::execute(&mut app.session, &cmd, p) {
             app.ui.status = e.to_string();
         }
     }

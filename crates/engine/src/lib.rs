@@ -64,6 +64,8 @@ pub mod voiceover;
 pub mod track_views;
 // Fork feature: fade handles on clip corners.
 pub mod fade_handles;
+// Fork feature: change every selected clip at once.
+pub mod multi_edit;
 
 use std::sync::Arc;
 

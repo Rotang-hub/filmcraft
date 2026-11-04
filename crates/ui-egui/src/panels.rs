@@ -54,6 +54,8 @@ pub mod timeline_hit;
 pub mod timeline_volume;
 pub mod tools;
 pub mod track_views;
+// Fork feature: edit every selected clip at once.
+pub mod multi_edit;
 pub mod transform_handles;
 pub mod transition_controls;
 pub mod trim_monitor;
