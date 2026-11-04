@@ -1120,8 +1120,16 @@ fn effect_drop_preview(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
                 ui.painter().rect_stroke(r, 3.0, Stroke::new(2.0, app.tokens.accent), StrokeKind::Inside);
             }
             if ctx.input(|i| i.pointer.any_released()) {
+                // fork: a preset dropped on one of the selected clips goes to all of them
+                let selected = app.session.state.selection.clone();
+                let preset_clips: Vec<u64> = if selected.contains(&clip) { selected.iter().map(|c| c.0).collect() } else { vec![clip.0] };
                 let r = if let Some(name) = effect.strip_prefix("preset:") {
-                    app.session.execute("presets.apply", json!({"preset": name, "clips": [clip.0]}))
+                    let r = app.session.execute("presets.apply", json!({"preset": name, "clips": preset_clips}));
+                    if let Ok(v) = &r {
+                        let n = v["applied"].as_u64().unwrap_or(0);
+                        app.ui.status = tlf!("Applied {preset} to {n} clips", preset = crate::i18n::t(name), n);
+                    }
+                    r
                 } else if let Some(name) = effect.strip_prefix(crate::panels::LUMETRI_PRESET_PREFIX) {
                     app.session.execute("lumetri.applyPreset", json!({"name": name, "clips": [clip.0]}))
                 } else if transition_kind.is_some() {
@@ -1131,7 +1139,7 @@ fn effect_drop_preview(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
                 };
                 if let Err(e) = r {
                     app.ui.status = e.to_string();
-                } else {
+                } else if !(effect.starts_with("preset:") && selected.contains(&clip)) {
                     let _ = app.session.execute("timeline.select", json!({"clips": [clip.0]}));
                 }
                 crate::panels::clear_drag(ui);

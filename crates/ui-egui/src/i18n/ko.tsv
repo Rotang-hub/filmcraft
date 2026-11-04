@@ -3720,3 +3720,5 @@
 	Fade in	페이드 인
 	Fade out	페이드 아웃
 	Set Fade	페이드 설정
+# Fork: applying effect presets.
+	Applied {preset} to {n} clips	{preset}: 클립 {n}개에 적용됨

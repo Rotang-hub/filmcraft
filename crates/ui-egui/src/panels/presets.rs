@@ -45,6 +45,14 @@ pub fn folder_rows(app: &mut FilmcraftApp, ui: &mut egui::Ui, filter: &str) -> O
             action = Some(("presets.apply".to_string(), p.name.clone()));
         }
         resp.context_menu(|ui| {
+            // fork: apply without relying on a double-click
+            let r = ui.add_enabled(!app.session.state.selection.is_empty(), egui::Button::new(tl!("Apply to Selected Clips")));
+            app.auto.add(&format!("effects.presetMenu.{}.apply", p.name), r.rect, tl!("Apply to Selected Clips"));
+            if r.clicked() {
+                action = Some(("presets.apply".to_string(), p.name.clone()));
+                ui.close();
+            }
+            ui.separator();
             if !p.builtin && ui.button(tl!("Delete Preset")).clicked() {
                 action = Some(("presets.delete".to_string(), p.name.clone()));
                 ui.close();
@@ -65,7 +73,15 @@ pub fn folder_rows(app: &mut FilmcraftApp, ui: &mut egui::Ui, filter: &str) -> O
 /// Run a Presets-bin action.
 pub fn run(app: &mut FilmcraftApp, cmd: &str, name: &str) {
     let r = match cmd {
-        "presets.apply" => app.session.execute(cmd, json!({"preset": name})),
+        "presets.apply" => {
+            // fork: say what was applied, so a double-click visibly did something
+            let r = app.session.execute(cmd, json!({"preset": name}));
+            if let Ok(v) = &r {
+                let n = v["applied"].as_u64().unwrap_or(0);
+                app.ui.status = tlf!("Applied {preset} to {n} clips", preset = crate::i18n::t(name), n);
+            }
+            r
+        }
         "presets.delete" => app.session.execute(cmd, json!({"name": name})),
         "presets.export" => {
             let name = name.to_string();
