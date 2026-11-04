@@ -25,6 +25,8 @@ pub mod mask;
 pub mod mixer;
 pub mod multicam;
 pub mod narration;
+// Fork: effect parameters shared copy-on-write (fast edits and undo on big sequences).
+pub mod param_map;
 pub mod transcript;
 pub mod vtransition;
 

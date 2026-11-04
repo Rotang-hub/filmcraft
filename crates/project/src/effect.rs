@@ -4,7 +4,6 @@
 //! all generated from [`EffectDef`]. Pixel/audio implementations live in the render/audio crates
 //! and are looked up by `EffectDef::id`.
 
-use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use filmcraft_geom::Vec2;
@@ -105,7 +104,8 @@ impl EffectDef {
 pub struct EffectInstance {
     pub effect: String,
     pub enabled: bool,
-    pub params: BTreeMap<String, Param>,
+    // Fork: shared copy-on-write (`crate::param_map`).
+    pub params: crate::param_map::ParamMap,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub masks: Vec<Mask>,
     /// Track/Mix inserts only: process after the fader instead of before it.

@@ -509,6 +509,11 @@ impl eframe::App for FilmcraftApp {
         // Flush the recovery journal and stop the auto-save worker; a session with nothing unsaved
         // removes its journal, one with unsaved changes keeps it for the next launch.
         self.session.shutdown();
+        // Fork: the process ends next, and the OS takes back its memory at once. Freeing up to 200
+        // undo snapshots one allocation at a time can hold the closing window for seconds
+        // ("Not Responding" on Windows), so they are left to the OS.
+        std::mem::forget(std::mem::take(&mut self.session.history.undo));
+        std::mem::forget(std::mem::take(&mut self.session.history.redo));
     }
 
     /// Eframe's UI entry: begin this pass's IME reset state, suspend custom controls when no
