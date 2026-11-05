@@ -2,7 +2,8 @@
 //! onto a clip or double-click to apply to the selection; right-click a user preset to delete or
 //! export it) and the Save Preset dialog (Effect Controls ▸ right-click an effect ▸ Save Preset…).
 //!
-//! Automation ids: `effects.preset.<name>`, `savePreset.name`, `savePreset.description`,
+//! Automation ids: `effects.preset.<name>`, `effects.folder.Presets/<folder path>` (fork),
+//! `savePreset.name`, `savePreset.description`,
 //! `savePreset.keyframes.<scale|anchorIn|anchorOut|none>`, `savePreset.ok`, `savePreset.cancel`.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
@@ -18,8 +19,26 @@ use crate::theme::Tokens;
 pub fn folder_rows(app: &mut FilmcraftApp, ui: &mut egui::Ui, filter: &str) -> Option<(String, String)> {
     let t = app.tokens;
     let mut action = None;
-    for p in app.session.presets.all() {
-        if !crate::i18n::matches_query(&p.name, filter) {
+    // fork: presets in folders (imported Premiere bins) are listed under folder rows, after the
+    // loose ones; `shown` is the folder path drawn last, with whether each level is open
+    let mut presets: Vec<_> = app.session.presets.all().into_iter().filter(|p| crate::i18n::matches_query(&p.name, filter)).collect();
+    presets.sort_by(|a, b| (!a.folder.is_empty(), &a.folder).cmp(&(!b.folder.is_empty(), &b.folder)));
+    let mut shown: Vec<(String, bool)> = Vec::new();
+    for p in presets {
+        let segs: Vec<&str> = p.folder.split('/').filter(|s| !s.is_empty()).collect();
+        let same = shown.iter().zip(&segs).take_while(|((a, _), b)| a == *b).count();
+        shown.truncate(same);
+        for (i, seg) in segs.iter().enumerate().skip(same) {
+            // a folder inside a closed one is not drawn
+            if shown.iter().all(|(_, open)| *open) {
+                let key = format!("Presets/{}", segs[..=i].join("/"));
+                let open = folder_row(app, ui, &key, seg, i + 1, filter);
+                shown.push((seg.to_string(), open));
+            } else {
+                shown.push((seg.to_string(), false));
+            }
+        }
+        if !shown.iter().all(|(_, open)| *open) {
             continue;
         }
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click_and_drag());
@@ -27,7 +46,7 @@ pub fn folder_rows(app: &mut FilmcraftApp, ui: &mut egui::Ui, filter: &str) -> O
             ui.painter().rect_filled(r, 0.0, t.hover);
         }
         // inside the Presets folder: icon and label one level deeper than it (#2329)
-        let x = r.min.x + crate::panels::effects::tree_x(1) + 18.0;
+        let x = r.min.x + crate::panels::effects::tree_x(1 + segs.len()) + 18.0;
         icons::paint(
             ui.painter(),
             Rect::from_center_size(pos2(x, r.center().y), vec2(13.0, 13.0)),
@@ -70,6 +89,31 @@ pub fn folder_rows(app: &mut FilmcraftApp, ui: &mut egui::Ui, filter: &str) -> O
     action
 }
 
+/// Fork: a folder row inside the Presets bin (like the Effects panel's own folder rows), labelled
+/// `name`; `key` is its full path, kept in the open-folder list. Returns whether it is open.
+fn folder_row(app: &mut FilmcraftApp, ui: &mut egui::Ui, key: &str, name: &str, depth: usize, filter: &str) -> bool {
+    let t = app.tokens;
+    let open = !filter.is_empty() || app.ui.expanded_fx.iter().any(|k| k == key);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(r, 0.0, t.hover);
+    }
+    let x = r.min.x + crate::panels::effects::tree_x(depth);
+    let chevron = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 4.0, r.center().y), vec2(10.0, 10.0)), chevron, t.text_dim);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(x + 18.0, r.center().y), vec2(13.0, 13.0)), Icon::Folder, t.text_dim);
+    ui.painter().text(pos2(x + 30.0, r.center().y), Align2::LEFT_CENTER, name, Tokens::ui(12.0), t.text);
+    app.auto.add(&format!("effects.folder.{key}"), r, name);
+    if resp.clicked() {
+        if open {
+            app.ui.expanded_fx.retain(|k| k != key);
+        } else {
+            app.ui.expanded_fx.push(key.to_string());
+        }
+    }
+    open
+}
+
 /// Run a Presets-bin action.
 pub fn run(app: &mut FilmcraftApp, cmd: &str, name: &str) {
     let r = match cmd {
@@ -94,10 +138,15 @@ pub fn run(app: &mut FilmcraftApp, cmd: &str, name: &str) {
             return;
         }
         "presets.import" => {
-            app.pick_ui(FileDialog::open_file(tl!("Effect presets"), &["json"]), |app, paths| {
+            app.pick_ui(FileDialog::open_file(tl!("Effect presets"), &["json", "prfpset"]), |app, paths| {
                 let Some(path) = paths.into_iter().next() else { return };
-                if let Err(e) = app.session.execute("presets.import", json!({"path": path})) {
-                    app.ui.status = e.to_string();
+                match app.session.execute("presets.import", json!({"path": path})) {
+                    // fork: say how many came in (a Premiere pack holds hundreds, in folders)
+                    Ok(v) => {
+                        let n = v["imported"].as_array().map_or(0, Vec::len);
+                        app.ui.status = tlf!("Imported {n} presets", n);
+                    }
+                    Err(e) => app.ui.status = e.to_string(),
                 }
             });
             return;

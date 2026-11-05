@@ -56,6 +56,7 @@ mod panels_ui;
 mod par_ui;
 mod perf_ui;
 mod playback_clock_ui;
+mod premiere_presets_ui;
 mod preset_apply_ui;
 mod project_panel_ui;
 mod properties_scroll_ui;

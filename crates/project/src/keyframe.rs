@@ -152,6 +152,13 @@ pub struct Keyframe {
     pub out_influence: f64,
     #[serde(default = "default_influence")]
     pub in_influence: f64,
+    /// Fork: height of the outgoing handle as a fraction of the segment's change — the handle's
+    /// speed, as Premiere and After Effects keep it (`None`: flat, an ease). Above 1 overshoots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_rise: Option<f64>,
+    /// Fork: the incoming handle's height below the segment's end, as a fraction of its change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_rise: Option<f64>,
 }
 
 fn default_influence() -> f64 {
@@ -160,7 +167,15 @@ fn default_influence() -> f64 {
 
 impl Keyframe {
     pub fn new(time: Tick, value: ParamValue) -> Self {
-        Self { time, value, interp: Interpolation::Linear, out_influence: default_influence(), in_influence: default_influence() }
+        Self {
+            time,
+            value,
+            interp: Interpolation::Linear,
+            out_influence: default_influence(),
+            in_influence: default_influence(),
+            out_rise: None,
+            in_rise: None,
+        }
     }
 }
 
@@ -368,9 +383,10 @@ fn ease(a: &Keyframe, b: &Keyframe, u: f64) -> f64 {
     }
     // Control points in normalized (time, value) space; flat handles = ease (velocity 0).
     let x1 = if out_ease { a.out_influence.clamp(0.01, 1.0) } else { 1.0 / 3.0 };
-    let y1 = if out_ease { 0.0 } else { 1.0 / 3.0 };
+    let rise = |r: Option<f64>| r.filter(|r| r.is_finite()).map_or(0.0, |r| r.clamp(-100.0, 100.0));
+    let y1 = if out_ease { rise(a.out_rise) } else { 1.0 / 3.0 };
     let x2 = if in_ease { 1.0 - b.in_influence.clamp(0.01, 1.0) } else { 2.0 / 3.0 };
-    let y2 = if in_ease { 1.0 } else { 2.0 / 3.0 };
+    let y2 = if in_ease { 1.0 - rise(b.in_rise) } else { 2.0 / 3.0 };
     cubic_bezier_y_for_x(x1, y1, x2, y2, u)
 }
 

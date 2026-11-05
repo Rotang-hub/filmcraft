@@ -75,6 +75,9 @@ pub struct EffectPreset {
     /// Built-in (not saved, cannot be deleted).
     #[serde(skip)]
     pub builtin: bool,
+    /// Fork: the folder it is listed in inside the Presets bin, `/`-separated (empty: the bin itself).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub folder: String,
 }
 
 fn hd() -> (u32, u32) {
@@ -130,6 +133,10 @@ fn file_bytes(presets: &[EffectPreset]) -> Vec<u8> {
 }
 
 fn parse_file(bytes: &[u8]) -> std::result::Result<Vec<EffectPreset>, String> {
+    // Fork: Premiere Pro's own preset files are read too
+    if crate::premiere_presets::is_premiere(bytes) {
+        return crate::premiere_presets::parse(bytes);
+    }
     let f: PresetFile = serde_json::from_slice(bytes).map_err(|e| format!("not an effect preset file: {e}"))?;
     if f.format != FILE_FORMAT {
         return Err(format!("not an effect preset file (format `{}`)", f.format));
@@ -191,6 +198,7 @@ fn preset(name: &str, description: &str, keyframes: KeyframeMode, secs: f64, eff
         source_size: hd(),
         effects,
         builtin: true,
+        folder: String::new(),
     }
 }
 
@@ -279,6 +287,7 @@ pub fn capture(it: &TrackItem, idx: &[usize], name: &str, description: &str, mod
         source_size: size,
         effects,
         builtin: false,
+        folder: String::new(),
     }
 }
 
@@ -429,6 +438,7 @@ fn preset_json(p: &EffectPreset) -> Value {
         "name": p.name,
         "description": p.description,
         "builtin": p.builtin,
+        "folder": p.folder,
         "keyframes": p.keyframes.label(),
         "effects": p.effects.iter().map(|e| e.def().map(|d| d.name).unwrap_or(e.effect.as_str()).to_string()).collect::<Vec<_>>(),
         "animated": p.effects.iter().any(|e| e.is_animated()),

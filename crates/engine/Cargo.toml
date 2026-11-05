@@ -22,6 +22,7 @@ neural-voices = ["filmcraft-tts/kokoro", "speech-download"]
 filmcraft-time = { workspace = true }
 filmcraft-geom = { workspace = true }
 filmcraft-color = { workspace = true }
+roxmltree = { workspace = true }
 filmcraft-frame = { workspace = true }
 filmcraft-media = { workspace = true }
 filmcraft-codecs = { workspace = true }

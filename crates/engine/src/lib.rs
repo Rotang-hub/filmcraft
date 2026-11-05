@@ -41,6 +41,8 @@ pub mod panels;
 pub mod paste_media;
 pub mod perf;
 pub mod presets;
+// Fork: Premiere Pro effect preset files (.prfpset).
+pub mod premiere_presets;
 pub mod previews;
 pub mod project_manager;
 pub mod project_panel;
