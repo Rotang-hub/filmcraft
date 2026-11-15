@@ -107,3 +107,29 @@ fn a_view_button_shows_and_plays_only_its_tracks() {
     d.click("trackViews.view.2");
     assert_eq!(d.view(), (vec![false, true, true], vec![true, true, true]));
 }
+
+#[test]
+fn the_number_of_buttons_is_set_in_setup() {
+    let mut d = Driver::new();
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.TrackViews"}));
+    d.frames(3);
+    let has = |d: &mut Driver, id: &str| d.ok("ui.elements", json!({"prefix": id})).as_array().is_some_and(|a| a.iter().any(|e| e["id"] == json!(id)));
+    assert!(has(&mut d, "trackViews.view.4") && !has(&mut d, "trackViews.view.5"), "four buttons to start");
+    d.click("trackViews.setup");
+    d.click("trackViews.count.plus");
+    d.click("trackViews.count.plus");
+    assert!(has(&mut d, "trackViews.view.6") && has(&mut d, "trackViews.edit.6"));
+    // a new button is assigned and used like the others
+    d.click("trackViews.edit.6");
+    d.click("trackViews.video.V1");
+    d.click("trackViews.view.6");
+    assert_eq!(d.view().0, vec![true, false, false]);
+    // removing takes the last button away; the one being edited stays in range
+    for _ in 0..4 {
+        d.click("trackViews.count.minus");
+    }
+    assert!(has(&mut d, "trackViews.view.2") && !has(&mut d, "trackViews.view.3"));
+    d.click("trackViews.video.V3");
+    d.click("trackViews.count.minus");
+    assert!(has(&mut d, "trackViews.view.1") && !has(&mut d, "trackViews.view.2"), "one button is the least");
+}

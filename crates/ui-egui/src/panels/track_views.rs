@@ -7,7 +7,8 @@
 //! and project. They are kept in [`FILE`] beside `preferences.json` in the data directory.
 //!
 //! Automation ids: `trackViews.view.<n>` (the buttons, 1-based), `trackViews.all`,
-//! `trackViews.setup`, and in the setup section `trackViews.edit.<n>`, `trackViews.name`,
+//! `trackViews.setup`, and in the setup section `trackViews.count.minus`, `trackViews.count.plus`,
+//! `trackViews.count` (how many buttons there are), `trackViews.edit.<n>`, `trackViews.name`,
 //! `trackViews.video.V<k>`, `trackViews.audio.A<k>`, `trackViews.capture`, `trackViews.clear`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
@@ -21,8 +22,12 @@ use serde_json::json;
 
 use crate::FilmcraftApp;
 
-/// How many view buttons the panel has.
+/// How many view buttons the panel starts with (the user changes the number in Setup).
 pub const BUTTONS: usize = 4;
+/// Most view buttons the panel keeps.
+pub const MAX_BUTTONS: usize = 16;
+/// Narrowest a view button is drawn before the row wraps.
+const MIN_BUTTON_WIDTH: f32 = 84.0;
 /// The file the assignments are kept in, beside `preferences.json`.
 pub const FILE: &str = "track_views.json";
 /// Largest file read (the file is untrusted).
@@ -81,11 +86,14 @@ pub struct TrackViews {
 }
 
 impl TrackViews {
-    /// The assignments in `path`, or [`BUTTONS`] empty buttons when it's missing or unreadable.
+    /// The assignments in `path` (as many buttons as it lists, at most [`MAX_BUTTONS`]), or
+    /// [`BUTTONS`] empty buttons when it's missing, unreadable or lists none.
     pub fn load(path: Option<PathBuf>) -> Self {
         let mut v: TrackViews = path.as_deref().and_then(read_bounded).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
-        v.views = v.views.into_iter().take(BUTTONS).map(View::sanitized).collect();
-        v.views.resize_with(BUTTONS, View::default);
+        v.views = v.views.into_iter().take(MAX_BUTTONS).map(View::sanitized).collect();
+        if v.views.is_empty() {
+            v.views.resize_with(BUTTONS, View::default);
+        }
         v.path = path;
         v
     }
@@ -166,7 +174,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         // ---- the view buttons
         let width = ui.available_width();
         let gap = ui.spacing().item_spacing.x;
-        let cols = BUTTONS.saturating_add(1) as f32;
+        // the buttons and "All" share a row while each keeps a usable width; more wrap to new rows
+        let count = views.views.len().saturating_add(1) as f32;
+        let cols = ((width + gap) / (MIN_BUTTON_WIDTH + gap)).floor().clamp(1.0, count);
         let w = ((width - gap * (cols - 1.0)) / cols - 2.0).floor().max(40.0);
         ui.horizontal_wrapped(|ui| {
             for (i, view) in views.views.iter().enumerate() {
@@ -209,9 +219,27 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if !views.setup_open {
             return;
         }
+        // how many buttons there are; removing takes the last one (and its assignment) away
         ui.horizontal(|ui| {
+            ui.label(tl!("Number of buttons:"));
+            let n = views.views.len();
+            let r = ui.add_enabled(n > 1, egui::Button::new("−").min_size(vec2(22.0, 0.0)));
+            app.auto.add_response("trackViews.count.minus", &r, "−");
+            if r.clicked() {
+                views.views.pop();
+            }
+            let r = ui.label(RichText::new(n.to_string()).strong());
+            app.auto.add_response("trackViews.count", &r, &n.to_string());
+            let r = ui.add_enabled(n < MAX_BUTTONS, egui::Button::new("+").min_size(vec2(22.0, 0.0)));
+            app.auto.add_response("trackViews.count.plus", &r, "+");
+            if r.clicked() {
+                views.views.push(View::default());
+            }
+        });
+        let buttons = views.views.len();
+        ui.horizontal_wrapped(|ui| {
             ui.label(tl!("Button:"));
-            for i in 0..BUTTONS {
+            for i in 0..buttons {
                 let r = ui.selectable_label(views.editing == i, (i.saturating_add(1)).to_string());
                 app.auto.add_response(&format!("trackViews.edit.{}", i.saturating_add(1)), &r, &(i.saturating_add(1)).to_string());
                 if r.clicked() {
@@ -219,7 +247,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             }
         });
-        let editing = views.editing.min(BUTTONS.saturating_sub(1));
+        let editing = views.editing.min(buttons.saturating_sub(1));
+        views.editing = editing;
         let Some(view) = views.views.get_mut(editing) else { return };
         ui.horizontal(|ui| {
             ui.label(tl!("Name:"));
@@ -330,15 +359,28 @@ mod tests {
         let text = json!({"views": [
             {"name": "Cam A", "video": ["V2", "V1", "V1", "X1", "V0", "V-3", ""], "audio": ["A1", "V1", "A99999999999999"]},
             {"name": "x".repeat(500)},
-            {}, {}, {"name": "sixth"}, {"name": "seventh"}
+            {}, {}, {"name": "fifth"}, {"name": "sixth"}
         ]});
         std::fs::write(&path, text.to_string()).unwrap();
         let v = TrackViews::load(Some(path.clone()));
-        assert_eq!(v.views.len(), BUTTONS);
+        assert_eq!(v.views.len(), 6, "the file's own number of buttons is kept");
         assert_eq!(v.views[0], View { name: "Cam A".into(), video: vec!["V1".into(), "V2".into()], audio: vec!["A1".into()] });
         assert_eq!(v.views[1].name.chars().count(), MAX_NAME_CHARS);
         v.save().unwrap();
         assert_eq!(TrackViews::load(Some(path)).views, v.views);
+    }
+
+    #[test]
+    fn the_number_of_buttons_is_capped_and_never_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(FILE);
+        let many: Vec<_> = (0..500).map(|i| json!({"name": i.to_string()})).collect();
+        std::fs::write(&path, json!({"views": many}).to_string()).unwrap();
+        assert_eq!(TrackViews::load(Some(path.clone())).views.len(), MAX_BUTTONS);
+        std::fs::write(&path, json!({"views": []}).to_string()).unwrap();
+        assert_eq!(TrackViews::load(Some(path.clone())).views.len(), BUTTONS);
+        std::fs::write(&path, json!({"views": [{"name": "only"}]}).to_string()).unwrap();
+        assert_eq!(TrackViews::load(Some(path)).views.len(), 1);
     }
 
     #[test]
