@@ -1,6 +1,6 @@
-//! Fork: Premiere Pro preset files (`.prfpset`) import into the Presets bin with their folders:
-//! each Premiere bin is a folder row that opens like the Effects panel's own folders, and the
-//! presets inside apply like any other.
+//! Fork: Premiere Pro preset files (`.prfpset`) import through the fork's reader into upstream's
+//! Presets bin: each Premiere bin is a folder row, the preset row shows its own name, and it applies
+//! with its keyframes like any other.
 
 use std::sync::mpsc::{Sender, channel};
 
@@ -67,7 +67,12 @@ fn premiere_presets_import_into_folders() {
     let mut s = Session::default();
     s.execute("file.openDemoProject", json!({})).unwrap();
     let r = s.execute("presets.import", json!({"path": path.to_string_lossy()})).unwrap();
-    assert_eq!(r["imported"], json!(["Pack Spin"]));
+    assert_eq!(r["imported"], json!(["Pack ▸ Slides ▸ Pack Spin"]));
+    // a preset imported before the merge keeps its folder in the `folder` field
+    let mut legacy = s.presets.user[0].clone();
+    legacy.name = "Legacy Spin".into();
+    legacy.folder = "Old Pack/Slides".into();
+    s.presets.user.push(legacy);
     let clip = s.active_sequence().unwrap().video_tracks[0].items[0].id.0;
     let (tx, rx) = channel();
     let app = FilmcraftApp::new(s).with_control(rx);
@@ -80,20 +85,26 @@ fn premiere_presets_import_into_folders() {
     d.frames(2);
 
     // closed folders hide what they hold
-    assert!(d.has("effects.folder.Presets/Pack"));
-    assert!(!d.has("effects.folder.Presets/Pack/Slides"));
-    assert!(!d.has("effects.preset.Pack Spin"));
-    d.ok("ui.click", json!({"id": "effects.folder.Presets/Pack"}));
+    assert!(d.has("effects.presetFolder.Presets/Pack"));
+    assert!(!d.has("effects.presetFolder.Presets/Pack ▸ Slides"));
+    assert!(!d.has("effects.preset.Pack ▸ Slides ▸ Pack Spin"));
+    d.ok("ui.click", json!({"id": "effects.presetFolder.Presets/Pack"}));
     d.frames(2);
-    d.ok("ui.click", json!({"id": "effects.folder.Presets/Pack/Slides"}));
+    d.ok("ui.click", json!({"id": "effects.presetFolder.Presets/Pack ▸ Slides"}));
     d.frames(2);
-    assert!(d.has("effects.preset.Pack Spin"), "inside its opened folders");
+    assert!(d.has("effects.preset.Pack ▸ Slides ▸ Pack Spin"), "inside its opened folders");
+    assert!(d.has("effects.presetFolder.Presets/Old Pack"), "a legacy `folder` is a folder too");
+    d.ok("ui.click", json!({"id": "effects.presetFolder.Presets/Old Pack"}));
+    d.frames(2);
+    d.ok("ui.click", json!({"id": "effects.presetFolder.Presets/Old Pack ▸ Slides"}));
+    d.frames(2);
+    assert!(d.has("effects.preset.Legacy Spin"));
 
     // it applies like any preset, keyframes and all
     d.ok("engine.execute", json!({"command": "timeline.select", "params": {"clips": [clip]}}));
-    d.ok("ui.click", json!({"id": "effects.preset.Pack Spin", "button": "right"}));
+    d.ok("ui.click", json!({"id": "effects.preset.Pack ▸ Slides ▸ Pack Spin", "button": "right"}));
     d.frames(2);
-    d.ok("ui.click", json!({"id": "effects.presetMenu.Pack Spin.apply"}));
+    d.ok("ui.click", json!({"id": "effects.presetMenu.Pack ▸ Slides ▸ Pack Spin.apply"}));
     d.frames(2);
     let q = d.harness.state().session.active_sequence().unwrap();
     let it = q.find_item(filmcraft_project::ClipId(clip)).unwrap().1;
@@ -101,11 +112,11 @@ fn premiere_presets_import_into_folders() {
     assert_eq!(t.params["rotation"].keyframes.len(), 2);
 
     // a search shows the preset inside its folders without opening them
-    d.ok("ui.click", json!({"id": "effects.folder.Presets/Pack"}));
+    d.ok("ui.click", json!({"id": "effects.presetFolder.Presets/Pack"}));
     d.frames(2);
-    assert!(!d.has("effects.preset.Pack Spin"));
+    assert!(!d.has("effects.preset.Pack ▸ Slides ▸ Pack Spin"));
     d.harness.state_mut().ui.effects_search = "spin".into();
     d.frames(2);
-    assert!(d.has("effects.preset.Pack Spin"));
+    assert!(d.has("effects.preset.Pack ▸ Slides ▸ Pack Spin"));
     let _ = std::fs::remove_dir_all(&dir);
 }

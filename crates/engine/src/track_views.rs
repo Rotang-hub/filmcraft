@@ -120,6 +120,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             enabled: has_seq,
             run: track_view_get,
             journal: false,
+            named: crate::commands::NamedKeys::NONE,
         },
         CommandSpec {
             id: "timeline.applyTrackView",
@@ -130,6 +131,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
             enabled: has_seq,
             run: track_view_apply,
             journal: true,
+            named: crate::commands::NamedKeys::NONE,
         },
     ]
 }

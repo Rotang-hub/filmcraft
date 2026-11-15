@@ -230,6 +230,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
         enabled: has_seq,
         run: for_selection,
         journal: true,
+        named: crate::commands::NamedKeys::NONE,
     }]
 }
 

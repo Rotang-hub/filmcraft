@@ -139,16 +139,17 @@ impl<'a, 'input> File<'a, 'input> {
         if effects.is_empty() || name.is_empty() {
             return None;
         }
+        // the bin path goes in the name, `" ▸ "`-separated, as upstream's Presets bin shows folders
+        let full = path.iter().map(String::as_str).chain([name]).collect::<Vec<_>>().join(" ▸ ");
         Some(EffectPreset {
-            name: name.to_string(),
+            name: full,
             description: "Imported from Premiere Pro".into(),
             keyframes,
             source_duration: Tick(anchor_out.saturating_sub(anchor_in).max(0)),
             source_size: (FRAME.0 as u32, FRAME.1 as u32),
             effects,
             builtin: false,
-            // `/` separates folders: one inside a name becomes a dash
-            folder: path.iter().map(|p| p.replace('/', "-")).collect::<Vec<_>>().join("/"),
+            folder: String::new(),
         })
     }
 
@@ -587,8 +588,7 @@ mod tests {
         let presets = parse(SAMPLE.as_bytes()).unwrap_or_default();
         assert_eq!(presets.len(), 1);
         let p = &presets[0];
-        assert_eq!(p.name, "Slide In");
-        assert_eq!(p.folder, "Slides");
+        assert_eq!(p.name, "Slides ▸ Slide In");
         assert_eq!(p.keyframes, KeyframeMode::AnchorToIn);
         assert_eq!(p.source_duration, Tick(TICKS_PER_SECOND));
         let t = &p.effects[0];
