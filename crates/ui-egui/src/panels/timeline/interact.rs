@@ -514,14 +514,7 @@ fn start_drag(
         (Tool::Slip, Grab::Other(Hit::Clip { clip, .. })) => Some(Drag::Slip { clip, delta: Tick::ZERO }),
         (Tool::Slide, Grab::Other(Hit::Clip { clip, .. })) => Some(Drag::Slide { clip, delta: Tick::ZERO }),
         (_, Grab::Other(Hit::Clip { clip, track, .. })) => {
-            // select (shift toggles; alt selects one side of a link)
-            let sel = &app.session.state.selection;
-            if mods.shift {
-                let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "toggle": true, "linked": !mods.alt}));
-            } else if !sel.contains(&clip) || (mods.alt && resp.clicked()) {
-                // Alt-click isolates one side; Alt-drag keeps the selected group to copy.
-                let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "linked": !mods.alt}));
-            }
+            select_pressed_clip(app, seq, clip, mods, resp.clicked());
             if resp.drag_started() {
                 let clips = app.session.state.selection.clone();
                 Some(Drag::Move { clips, grab_tick: t, start_track: track, offset: Tick::ZERO, track_delta: 0, new_track: None, copy: mods.alt })
@@ -1443,6 +1436,23 @@ pub(super) fn interact(app: &mut FilmcraftApp, ui: &mut egui::Ui, seq: &Sequence
     drop_targets(app, ui, seq, layout);
 
     app.auto.add("timeline.tracks", layout.content, "tracks");
+}
+
+/// Select the clip a press landed on: Shift toggles it, Alt takes one side of a link.
+fn select_pressed_clip(app: &mut FilmcraftApp, seq: &Sequence, clip: ClipId, mods: egui::Modifiers, clicked: bool) {
+    let sel = &app.session.state.selection;
+    if mods.shift {
+        let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "toggle": true, "linked": !mods.alt}));
+    } else if !sel.contains(&clip) || (mods.alt && clicked) {
+        // Alt-click isolates one side; Alt-drag keeps the selected group to copy.
+        let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "linked": !mods.alt}));
+    } else if !mods.alt && sel.len() == 1 && seq.find_item(clip).is_some_and(|(_, it)| it.link.is_some()) {
+        // Fork: a clip isolated by Alt+click (to change its volume, say) stayed the whole
+        // selection, so the next plain click or drag on it acted on that clip alone, as if
+        // its link were broken. A plain press takes its linked clips again (when Linked
+        // Selection is on; `timeline.select` decides).
+        let _ = app.session.execute("timeline.select", json!({"clips": [clip.0], "linked": true}));
+    }
 }
 
 #[cfg(test)]
