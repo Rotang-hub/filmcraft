@@ -11,7 +11,8 @@
 //! `trackViews.count` (how many buttons there are), `trackViews.edit.<n>`, `trackViews.name`,
 //! `trackViews.video.V<k>`, `trackViews.audio.A<k>`, `trackViews.capture`, `trackViews.clear`.
 //!
-//! Keys 1–9 press the view buttons while the Timeline (or this panel) has focus ([`key`]). They
+//! Keys 1–9 press the view buttons while the Timeline (or this panel) has focus ([`key`]); the
+//! key after the last button is "All" (5 with four buttons; none with nine or more). They
 //! are the multi-camera keys (`multicam.selectCamera<n>`): those keep their meaning during a
 //! multi-camera recording pass and on a multi-camera clip, and a focused text field keeps its
 //! digits as with every single-key shortcut.
@@ -178,6 +179,14 @@ pub fn key(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str) -> bool {
         return false;
     }
     let views = state(app, ctx);
+    // the key after the last button is "All"
+    if n == views.views.len().saturating_add(1) {
+        app.ui.status = match app.session.execute("timeline.applyTrackView", json!({"all": true, "label": tl!("Show All Tracks")})) {
+            Ok(_) => tl!("Show All Tracks").to_string(),
+            Err(e) => e.to_string(),
+        };
+        return true;
+    }
     let Some(view) = n.checked_sub(1).and_then(|i| views.views.get(i)) else { return false };
     if view.is_empty() {
         app.ui.status = tlf!("Track View {n} has no tracks assigned yet", n);

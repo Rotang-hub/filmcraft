@@ -156,6 +156,12 @@ fn number_keys_press_the_view_buttons_in_the_timeline() {
     let undo = d.harness.state().session.history.undo.len();
     press(&mut d, egui::Key::Num3);
     assert_eq!(d.harness.state().session.history.undo.len(), undo);
+    // the key after the last button (5 with four buttons) is "All"; a later one is nothing
+    press(&mut d, egui::Key::Num5);
+    assert_eq!(d.view(), (vec![true, true, true], vec![true, true, true]));
+    press(&mut d, egui::Key::Num2);
+    press(&mut d, egui::Key::Num6);
+    assert_eq!(d.view(), (vec![false, true, false], vec![true, false, false]));
     // elsewhere the key is not a view button
     d.click("trackViews.all");
     d.harness.state_mut().ui.focused = filmcraft_ui_egui::dock::PanelKind::EffectControls;
