@@ -1816,3 +1816,39 @@ fn new_items_land_in_the_bin_of_the_panel_they_were_made_in() {
     let id = newest(&mut d);
     assert_eq!(parent(&mut d, id), Some(filmcraft_project::BinId(other)), "no bin: the shown one");
 }
+
+/// Fork: items leave the bin they are in by a drag onto Up one level (inside the bin) or onto
+/// empty space (from a bin twirled open in List view).
+#[test]
+fn dragged_items_move_out_of_their_bin() {
+    let mut d = project_driver();
+    d.exec("project.view.set", json!({"view": "list"}));
+    let (bin, items) = d.footage();
+    let root = d.app().session.project.root.id;
+    let parent = |d: &mut Driver, i: u64| d.app().session.project.root.parent_of(filmcraft_project::ItemId(i)).map(|b| b.0);
+    let drag = |d: &mut Driver, from: [f32; 4], to: (f32, f32)| {
+        let start = (from[0] + 80.0, from[1] + from[3] / 2.0);
+        d.ok("ui.drag", json!({"from": {"x": start.0, "y": start.1}, "to": {"x": to.0, "y": to.1}, "steps": 12}));
+        d.frames(3);
+    };
+    // from the twirled-open bin onto empty space
+    d.click(&format!("project.bin.{bin}.toggle"));
+    d.wait_for(&format!("project.item.{}", items[0]));
+    let from = d.rect(&format!("project.item.{}", items[0]));
+    let to = centre(d.rect("project.empty"));
+    drag(&mut d, from, to);
+    assert_eq!(parent(&mut d, items[0]), Some(root.0));
+    // an item already in the shown bin stays where it is
+    let undo = d.app().session.history.undo.len();
+    let from = d.rect(&format!("project.item.{}", items[0]));
+    drag(&mut d, from, to);
+    assert_eq!(d.app().session.history.undo.len(), undo);
+    // inside the bin, onto Up one level
+    filmcraft_ui_egui::panels::project::navigate(d.app(), filmcraft_ui_egui::panels::project::Inst::Main, Some(bin));
+    d.frames(3);
+    let from = d.rect(&format!("project.item.{}", items[1]));
+    let to = centre(d.rect("project.up"));
+    drag(&mut d, from, to);
+    assert_eq!(parent(&mut d, items[1]), Some(root.0));
+    assert_eq!(parent(&mut d, items[2]), Some(bin), "the others stay");
+}

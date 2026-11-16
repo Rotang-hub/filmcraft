@@ -36,8 +36,10 @@ pub mod notes;
 // Fork feature: Track Views panel.
 pub mod panel_state;
 pub mod presets;
+// Fork: drag items out of a bin (onto Up one level, or empty space).
 pub mod project;
 pub mod project_dialogs;
+pub mod project_drop_out;
 pub mod project_views;
 pub mod reference;
 pub mod remix;

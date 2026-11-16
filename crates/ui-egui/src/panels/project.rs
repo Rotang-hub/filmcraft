@@ -412,6 +412,8 @@ fn body(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect, v: &View, actions
         ui.painter().rect_stroke(up, 3.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     }
     icons::paint(ui.painter(), Rect::from_center_size(up.center(), vec2(14.0, 14.0)), Icon::ArrowUp, if can_up { t.text } else { t.text_faint });
+    // fork: items or a bin dropped on the button move up one level
+    super::project_drop_out::up_button_drop(app, ui, up, v, top, actions);
     if up_resp.clicked() && can_up {
         let parent = parent_bin(&app.session.project.root, v.bin);
         navigate(app, v.inst, parent.map(|b| b.0));

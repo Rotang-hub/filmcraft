@@ -688,6 +688,8 @@ fn empty_space(app: &mut FilmcraftApp, ui: &mut egui::Ui, v: &View, bg: &egui::R
     app.auto.add(&format!("{}.empty", v.prefix), r.intersect(ui.clip_rect()), "Empty area");
     marquee(app, ui, v, bg, ui.max_rect().min, actions);
     accept_view_drop(app, ui, r, v, actions);
+    // fork: items dragged out of a twirled-open sub-bin too
+    super::project_drop_out::empty_space_drop(app, ui, r, v, actions);
     if bg.clicked() {
         app.ui.project_panel.selected_bin = None;
         actions.push(("project.select".into(), json!({"items": []})));
