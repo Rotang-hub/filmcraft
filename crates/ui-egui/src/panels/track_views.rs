@@ -11,6 +11,11 @@
 //! `trackViews.count` (how many buttons there are), `trackViews.edit.<n>`, `trackViews.name`,
 //! `trackViews.video.V<k>`, `trackViews.audio.A<k>`, `trackViews.capture`, `trackViews.clear`.
 //!
+//! Keys 1–9 press the view buttons while the Timeline (or this panel) has focus ([`key`]). They
+//! are the multi-camera keys (`multicam.selectCamera<n>`): those keep their meaning during a
+//! multi-camera recording pass and on a multi-camera clip, and a focused text field keeps its
+//! digits as with every single-key shortcut.
+//!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
 use std::path::{Path, PathBuf};
@@ -154,6 +159,36 @@ fn matches(view: &View, video: &[String], audio: &[String], nv: usize, na: usize
 fn button_label(i: usize, view: &View) -> String {
     let n = i.saturating_add(1);
     if view.name.trim().is_empty() { n.to_string() } else { format!("{n} · {}", view.name.trim()) }
+}
+
+/// Whether the multi-camera keys mean cameras now: a recording pass runs, or a multi-camera clip
+/// is under the playhead.
+fn multicam_here(app: &FilmcraftApp) -> bool {
+    let s = &app.session;
+    let t = s.playhead();
+    s.mcrec.active() || s.active_sequence().is_some_and(|q| q.video_tracks.iter().any(|tr| tr.item_at(t).is_some_and(|i| i.multicam.is_some())))
+}
+
+/// A fired shortcut `id`: when it is a camera key (`multicam.selectCamera<n>`) pressed with the
+/// Timeline or this panel focused and no multi-camera work under way, press view button `n`.
+/// Returns whether the key was taken (also for a button with no tracks, which only says so).
+pub fn key(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str) -> bool {
+    let Some(n) = id.strip_prefix("multicam.selectCamera").and_then(|n| n.parse::<usize>().ok()) else { return false };
+    if !matches!(app.ui.focused, crate::PanelKind::Timeline | crate::PanelKind::TrackViews) || multicam_here(app) || app.session.active_sequence().is_none() {
+        return false;
+    }
+    let views = state(app, ctx);
+    let Some(view) = n.checked_sub(1).and_then(|i| views.views.get(i)) else { return false };
+    if view.is_empty() {
+        app.ui.status = tlf!("Track View {n} has no tracks assigned yet", n);
+        return true;
+    }
+    let p = json!({"video": view.video, "audio": view.audio, "label": tlf!("Track View {n}", n)});
+    app.ui.status = match app.session.execute("timeline.applyTrackView", p) {
+        Ok(_) => button_label(n.saturating_sub(1), view),
+        Err(e) => e.to_string(),
+    };
+    true
 }
 
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {

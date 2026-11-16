@@ -133,3 +133,37 @@ fn the_number_of_buttons_is_set_in_setup() {
     d.click("trackViews.count.minus");
     assert!(has(&mut d, "trackViews.view.1") && !has(&mut d, "trackViews.view.2"), "one button is the least");
 }
+
+#[test]
+fn number_keys_press_the_view_buttons_in_the_timeline() {
+    let mut d = Driver::new();
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.TrackViews"}));
+    d.frames(3);
+    d.click("trackViews.setup");
+    d.click("trackViews.edit.2");
+    for id in ["trackViews.video.V2", "trackViews.audio.A1"] {
+        d.click(id);
+    }
+    let press = |d: &mut Driver, key: egui::Key| {
+        d.harness.key_press(key);
+        d.frames(3);
+    };
+    // with the Timeline focused, 2 is button 2
+    d.harness.state_mut().ui.focused = filmcraft_ui_egui::dock::PanelKind::Timeline;
+    press(&mut d, egui::Key::Num2);
+    assert_eq!(d.view(), (vec![false, true, false], vec![true, false, false]));
+    // a button with no tracks changes nothing
+    let undo = d.harness.state().session.history.undo.len();
+    press(&mut d, egui::Key::Num3);
+    assert_eq!(d.harness.state().session.history.undo.len(), undo);
+    // elsewhere the key is not a view button
+    d.click("trackViews.all");
+    d.harness.state_mut().ui.focused = filmcraft_ui_egui::dock::PanelKind::EffectControls;
+    press(&mut d, egui::Key::Num2);
+    assert_eq!(d.view(), (vec![true, true, true], vec![true, true, true]));
+    // nor while a text field has focus, even with the Timeline the focused panel
+    d.click("trackViews.name");
+    d.harness.state_mut().ui.focused = filmcraft_ui_egui::dock::PanelKind::Timeline;
+    press(&mut d, egui::Key::Num2);
+    assert_eq!(d.view(), (vec![true, true, true], vec![true, true, true]));
+}

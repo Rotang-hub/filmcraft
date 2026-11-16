@@ -146,6 +146,10 @@ impl FilmcraftApp {
     /// Run the commands of the bindings `match_shortcuts` fired, as the focused panel scopes them.
     fn fire_shortcuts(&mut self, ctx: &egui::Context, fire: Vec<String>) {
         for id in fire {
+            // Fork: keys 1–9 press the Track Views buttons in the Timeline (unless multi-camera)
+            if panels::track_views::key(self, ctx, &id) {
+                continue;
+            }
             // Clear in the Project panel removes the selected bin when no item is selected (#587).
             let clear = if self.ui.focused == PanelKind::Project && id == "project.delete" {
                 self.ui.project_panel.rename = None;
