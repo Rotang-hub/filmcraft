@@ -18,7 +18,7 @@ use crate::FilmcraftApp;
 fn dragged_items(app: &FilmcraftApp, ui: &egui::Ui) -> Option<Vec<ItemId>> {
     let item = crate::panels::dragged_project_item(ui)?;
     let sel = &app.session.state.project_selection;
-    Some(if sel.contains(&item) { sel.iter().copied().collect() } else { vec![item] })
+    Some(if sel.contains(&item) { sel.to_vec() } else { vec![item] })
 }
 
 /// A drop on the Up button (`r`) of a view that shows a bin below `top`.
