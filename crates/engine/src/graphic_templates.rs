@@ -118,7 +118,7 @@ pub fn find_template(s: &Session, key: &str) -> Result<LibraryEntry> {
 }
 
 /// Register the fonts a template embeds (once per font file).
-fn register_fonts(t: &GraphicsTemplate) -> usize {
+pub(crate) fn register_fonts(t: &GraphicsTemplate) -> usize {
     static SEEN: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
     let mut n = 0;
     for f in &t.resources.fonts {

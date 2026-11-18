@@ -43,10 +43,12 @@ pub enum PanelKind {
     ProjectNotes,
     /// Fork feature: buttons that show and hear only chosen tracks.
     TrackViews,
+    /// Fork: automatic captions per speaker (head-caption presets) and caption spell check.
+    SpeakerCaptions,
 }
 
 impl PanelKind {
-    pub const ALL: [PanelKind; 29] = [
+    pub const ALL: [PanelKind; 30] = [
         PanelKind::Project,
         PanelKind::MediaBrowser,
         PanelKind::Libraries,
@@ -76,6 +78,7 @@ impl PanelKind {
         PanelKind::Timecode,
         PanelKind::ProjectNotes,
         PanelKind::TrackViews,
+        PanelKind::SpeakerCaptions,
     ];
     pub fn title(self) -> &'static str {
         match self {
@@ -108,6 +111,7 @@ impl PanelKind {
             PanelKind::Timecode => "Timecode",
             PanelKind::ProjectNotes => "Project Notes",
             PanelKind::TrackViews => "Track Views",
+            PanelKind::SpeakerCaptions => "Speaker Captions",
         }
     }
     pub fn id(self) -> String {

@@ -43,6 +43,7 @@ pub mod perf;
 pub mod presets;
 // Fork: Premiere Pro effect preset files (.prfpset).
 pub mod premiere_presets;
+// Fork: automatic captions per speaker as head-caption graphics, and caption text export/import.
 pub mod previews;
 pub mod prfpset;
 pub mod project_manager;
@@ -59,6 +60,7 @@ pub mod settings;
 pub mod shortcut_presets;
 pub mod shortcuts;
 pub mod source_monitor;
+pub mod speaker_captions;
 pub mod sync;
 pub mod transcript;
 pub mod trim;

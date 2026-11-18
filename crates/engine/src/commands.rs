@@ -4236,6 +4236,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::fade_handles::commands());
     // Fork feature: edit the selection.
     v.extend(crate::multi_edit::commands());
+    // Fork: speaker captions (head-caption graphics per person), caption text export/import
+    v.extend(crate::speaker_captions::commands());
     // Edit ▸ Label ▸ <colour>, Paste Attributes, subclips, Video / Audio Options, Replace With Clip…
     // and their menu order
     crate::clip_ops::apply_layout(&mut v);

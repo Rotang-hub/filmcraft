@@ -42,7 +42,8 @@ fn unicode_to_byte() -> HashMap<char, u8> {
             n += 1;
         }
     }
-    bs.iter().zip(&cs).map(|(&b, &c)| (char::from_u32(c).expect("valid"), b as u8)).collect()
+    // every code point here is below 0x200: none is a surrogate, so none is skipped
+    bs.iter().zip(&cs).filter_map(|(&b, &c)| char::from_u32(c).map(|ch| (ch, b as u8))).collect()
 }
 
 impl Tokenizer {

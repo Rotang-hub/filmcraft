@@ -55,6 +55,8 @@ pub mod timeline_captions;
 pub mod timeline_hit;
 pub mod timeline_volume;
 pub mod tools;
+// Fork: speaker captions panel.
+pub mod speaker_captions;
 pub mod track_views;
 // Fork feature: edit every selected clip at once.
 pub mod multi_edit;
@@ -174,6 +176,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, p: PanelKind, rect: Rect)
         PanelKind::TextToSpeech => tts::show(app, ui, rect),
         PanelKind::ProjectNotes => notes::show(app, ui, rect),
         PanelKind::TrackViews => track_views::show(app, ui, rect),
+        PanelKind::SpeakerCaptions => speaker_captions::show(app, ui, rect),
         other => crate::dock::placeholder(ui, rect, &app.tokens, &tlf!("{panel} — coming in a later milestone", panel = crate::i18n::t(other.title()))),
     }
 }

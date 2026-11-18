@@ -75,6 +75,7 @@ mod settings_ui;
 mod shared_docking_ui;
 mod source_drag_ui;
 mod source_playback_ui;
+mod speaker_captions_ui;
 mod status_bar_ui;
 mod timecode_ui;
 mod timeline_drop_ui;

@@ -124,12 +124,12 @@ fn item_audio(s: &Session, item: ItemId) -> Option<Vec<f32>> {
     Some(filmcraft_speech::downmix(&buf.channels))
 }
 
-fn speech_err(e: SpeechError) -> EngineError {
+pub(crate) fn speech_err(e: SpeechError) -> EngineError {
     EngineError::Other(e.to_string())
 }
 
 /// The transcriber to use: the installed one, else the named catalogue model.
-fn transcriber(s: &Session, p: &Value) -> Result<Arc<dyn Transcriber>> {
+pub(crate) fn transcriber(s: &Session, p: &Value) -> Result<Arc<dyn Transcriber>> {
     if let Some(t) = &s.transcriber {
         return Ok(t.clone());
     }

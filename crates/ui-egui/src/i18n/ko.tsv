@@ -3744,3 +3744,33 @@
 	This is a custom build: update it from its source (update.bat), not from official releases	사용자 빌드예요: 공식 업데이트 대신 update.bat으로 소스에서 업데이트하세요
 	Number of buttons:	버튼 개수:
 	Track View {n} has no tracks assigned yet	트랙 보기 {n}에 지정된 트랙이 없어요
+# Fork: speaker captions.
+	Speaker Captions	화자별 자막
+	(nobody)	(없음)
+	A person's preset is "<name>_머리자막.fcgt" in this folder.	이 폴더에 있는 "이름_머리자막.fcgt"를 그 사람의 프리셋으로 써요.
+	Caption text	자막 텍스트
+	Corrected {n} captions	자막 {n}개를 고쳤어요
+	Download the speech model	음성 인식 모델 받기
+	Downloaded once from Hugging Face (OpenAI Whisper, MIT licence).	Hugging Face에서 한 번만 내려받아요 (OpenAI Whisper, MIT 라이선스).
+	Downloading the speech model…	음성 인식 모델을 받는 중…
+	Export Caption Text…	자막 텍스트 내보내기…
+	Export the caption text, have it checked (send the file to Claude), then import the corrected file.	자막 텍스트를 내보내 검사를 맡기고(파일을 Claude에게 보내기), 고친 파일을 가져오세요.
+	Exported {n} captions	자막 {n}개를 내보냈어요
+	Head-caption preset folder	머리 자막 프리셋 폴더
+	Import Corrected Text…	고친 텍스트 가져오기…
+	Loading the speech model…	음성 인식 모델을 불러오는 중…
+	Make Captions	자막 만들기
+	Most characters per caption	자막 한 개 최대 글자 수
+	Name at least one audio track whose head-caption preset is in the folder	프리셋이 폴더에 있는 사람을 오디오 트랙에 한 명 이상 지정하세요
+	No speech was found on the named tracks	지정한 트랙에서 말소리를 찾지 못했어요
+	Open a sequence to make speaker captions.	시퀀스를 열면 화자별 자막을 만들 수 있어요.
+	Speech model downloaded	음성 인식 모델을 받았어요
+	Spell check	맞춤법 검사
+	The named tracks have no clips	지정한 트랙에 클립이 없어요
+	This build has no speech recognition (build with the `whisper` feature).	이 빌드에는 음성 인식이 없어요 (`whisper` 기능을 켜고 빌드하세요).
+	Transcribing clip {k} of {n}…	클립 {n}개 중 {k}번째 받아쓰는 중…
+	Who speaks on each audio track	오디오 트랙별 화자
+	Whoever starts talking first keeps the main place; anyone talking over them goes above.	먼저 말을 시작한 사람이 원래 자리에, 동시에 말한 사람은 그 위에 표시돼요.
+	no preset	프리셋 없음
+	✓ preset	✓ 프리셋
+	Made {n} captions ({k} while someone else was talking)	자막 {n}개를 만들었어요 (동시에 말한 자막 {k}개)

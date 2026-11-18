@@ -55,6 +55,8 @@ filmcraft-codecs = { workspace = true }
 # itself stays OS-independent and web-portable)
 filmcraft-platform = { workspace = true }
 filmcraft-interchange = { workspace = true }
+# Fork: a fixed transcriber for the speaker captions panel tests
+filmcraft-speech = { workspace = true }
 # A dependency's dev-dependencies do not propagate through egui_kittest: name the fonts this
 # test root needs explicitly so glyph and accessibility assertions run against the bundled faces.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
