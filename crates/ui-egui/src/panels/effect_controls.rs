@@ -271,6 +271,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             let mut order: Vec<usize> = (0..it.effects.len()).collect();
             order.sort_by_key(|i| !it.effects[*i].def().is_some_and(|d| d.intrinsic));
             let mut after_fixed = false;
+            let mut headers: Vec<super::effect_reorder::Header> = Vec::new();
             for idx in order {
                 let e = &it.effects[idx];
                 let Some(def) = e.def() else { continue };
@@ -285,7 +286,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 let key = format!("{}:{}", clip.0, idx);
                 let open = !app.ui.collapsed_fx.contains(&key);
                 let selected = app.session.state.selected_effect.as_ref().is_some_and(|s| s.clip == clip && s.index(&it.effects) == Some(idx));
-                let (r, resp) = bui.allocate_exact_size(vec2(body.width(), ROW_H), Sense::click());
+                // fork: an added effect's header also drags (to reorder it)
+                let movable = filmcraft_engine::effect_order::movable(e);
+                let (r, resp) = bui.allocate_exact_size(vec2(body.width(), ROW_H), if movable { Sense::click_and_drag() } else { Sense::click() });
+                super::effect_reorder::header(bui, clip, super::effect_reorder::Header { index: idx, rect: r, movable }, &resp, &mut headers);
                 if selected {
                     bui.painter().rect_filled(crate::panels::effect_controls::row_fill(r), 0.0, t.row_selected);
                 } else if resp.hovered() {
@@ -379,6 +383,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                     crate::panels::masks::effect_rows(app, bui, body, clip, idx, e, mt_now, &mut actions, &lane, &lx, it, &mut keys);
                 }
             }
+            // fork: drag an added effect's header to reorder it
+            super::effect_reorder::finish(app, bui, clip, &headers, &mut actions);
         }
     });
     let _ = scroll_out;

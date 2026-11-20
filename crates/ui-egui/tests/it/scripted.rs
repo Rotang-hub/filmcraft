@@ -609,3 +609,42 @@ fn eyedropper_picks_a_key_color_on_a_selected_clip() {
     d.wait_until("the eyedropper to fill Key Color", |d| color(d) != before);
     assert_ne!(color(&mut d), before, "the eyedropper filled Key Color from the Program picture");
 }
+
+/// Fork: dragging an added effect's header in Effect Controls moves it in the stack.
+#[test]
+fn dragging_an_effect_header_reorders_the_added_effects() {
+    let mut d = Driver::demo();
+    let clip = track_clips(&d.sequence(), 0)[0]["clip"].as_u64().unwrap();
+    d.exec("timeline.select", json!({"clips": [clip]}));
+    for fx in ["Gaussian Blur", "Tint", "Mirror"] {
+        d.exec("effects.apply", json!({"effect": fx}));
+    }
+    // twirled shut, so the headers sit one under another
+    d.ok("ui.panel.show", json!({"panel": "Effect Controls"}));
+    d.frames(3);
+    for fx in ["gaussian_blur", "tint", "mirror"] {
+        d.ok("ui.click", json!({"id": format!("effectControls.effect.{fx}.twirl")}));
+        d.frames(1);
+    }
+    let rect = |d: &mut Driver, id: &str| {
+        let v = d.ok("ui.elements", json!({"prefix": id}));
+        let e = v.as_array().unwrap().iter().find(|e| e["id"] == json!(id)).unwrap_or_else(|| panic!("{id}")).clone();
+        let r = &e["rect"];
+        (r[0].as_f64().unwrap(), r[1].as_f64().unwrap(), r[2].as_f64().unwrap(), r[3].as_f64().unwrap())
+    };
+    let blur = rect(&mut d, "effectControls.effect.gaussian_blur");
+    let mirror = rect(&mut d, "effectControls.effect.mirror");
+    // rects are [x, y, width, height]
+    let from = (blur.0 + 120.0, blur.1 + blur.3 / 2.0);
+    let to = (from.0, mirror.1 + mirror.3 + 4.0);
+    d.ok("ui.drag", json!({"from": {"x": from.0, "y": from.1}, "to": {"x": to.0, "y": to.1}, "steps": 12}));
+    d.frames(3);
+    let order: Vec<String> = track_clips(&d.sequence(), 0)[0]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|e| e["effect"].as_str().map(str::to_string))
+        .filter(|e| ["gaussian_blur", "tint", "mirror"].contains(&e.as_str()))
+        .collect();
+    assert_eq!(order, ["tint", "mirror", "gaussian_blur"]);
+}

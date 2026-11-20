@@ -7,7 +7,9 @@ pub mod clip_dialogs;
 pub mod clip_mismatch;
 pub mod color_dialogs;
 pub mod dialogs;
+// Fork: drag to reorder effects in Effect Controls.
 pub mod effect_controls;
+pub mod effect_reorder;
 pub mod effects;
 pub mod essential_sound;
 pub mod events;

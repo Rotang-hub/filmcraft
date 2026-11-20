@@ -61,6 +61,8 @@ pub mod shortcut_presets;
 pub mod shortcuts;
 pub mod source_monitor;
 pub mod speaker_captions;
+// Fork: reorder a clip's added effects.
+pub mod effect_order;
 pub mod sync;
 pub mod transcript;
 pub mod trim;
