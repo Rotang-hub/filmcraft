@@ -11,7 +11,7 @@
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
 //! `autoCut.fill`, `autoCut.add`, `autoCut.name.<n>`, `autoCut.video.<n>`, `autoCut.audio.<n>`,
 //! `autoCut.remove.<n>`, `autoCut.minShot`, `autoCut.reactions`, `autoCut.buildup`, `autoCut.hold`,
-//! `autoCut.markers`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.make`, `autoCut.cancel`.
+//! `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.make`, `autoCut.cancel`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
@@ -49,6 +49,7 @@ pub struct Settings {
     pub hold: f64,
     pub reactions: bool,
     pub markers: bool,
+    pub mute_views: bool,
     pub trim: bool,
     pub min_silence: f64,
     pub pad: f64,
@@ -64,6 +65,7 @@ impl Default for Settings {
             hold: t.hold,
             reactions: true,
             markers: true,
+            mute_views: true,
             trim: t.trim,
             min_silence: t.min_silence,
             pad: t.pad,
@@ -97,7 +99,7 @@ impl Settings {
             .filter(|r| !r.video.is_empty() && !r.audio.is_empty())
             .map(|r| json!({"name": if r.name.trim().is_empty() { r.video.clone() } else { r.name.trim().to_string() }, "video": r.video, "audio": r.audio}))
             .collect();
-        json!({"people": people, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad})
+        json!({"people": people, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "muteViews": self.mute_views, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad})
     }
 }
 
@@ -224,6 +226,12 @@ fn finish(app: &mut FilmcraftApp, result: Result<Planned, String>, req: Option<V
             if secs > 0.0 {
                 m.push_str(&format!(" · {}", tlf!("{n} silences cut ({secs} sec)", n = v["cuts"].as_u64().unwrap_or(0), secs = format!("{secs:.1}"))));
             }
+            if v["soundTracks"].as_u64().unwrap_or(0) == 0 {
+                m.push_str(&format!(" · {}", tl!("the views have no sound of their own linked (only microphones), so no Auto Cut audio track")));
+            } else if let Some(names) = v["muted"].as_array().filter(|a| !a.is_empty()) {
+                let list = names.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ");
+                m.push_str(&format!(" · {}", tlf!("muted the original view sound: {tracks}", tracks = list)));
+            }
             m
         }
         Err(e) => e.to_string(),
@@ -332,6 +340,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             let r = ui.checkbox(&mut st.settings.markers, tl!("Mark big moments on the timeline"));
             app.auto.add_response("autoCut.markers", &r, tl!("Mark big moments on the timeline"));
         }
+        let r = ui.checkbox(&mut st.settings.mute_views, tl!("Mute the views' original sound (the Auto Cut audio track plays it)"));
+        app.auto.add_response("autoCut.muteViews", &r, tl!("Mute the views' original sound (the Auto Cut audio track plays it)"));
         let r = ui.checkbox(&mut st.settings.trim, tl!("Cut out the parts where nobody talks"));
         app.auto.add_response("autoCut.trim", &r, tl!("Cut out the parts where nobody talks"));
         if st.settings.trim {

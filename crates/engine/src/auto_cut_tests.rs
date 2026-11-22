@@ -223,6 +223,67 @@ fn the_cut_is_built_on_its_own_track_from_the_views() {
 }
 
 #[test]
+fn each_views_own_sound_is_cut_with_it_onto_an_auto_cut_audio_track() {
+    let mut s = demo();
+    // B's view (V2) has its own linked game sound on A3; microphones are A1 and A2
+    s.edit_sequence("test", |q, ctx, _| {
+        let mut sound = Vec::new();
+        for v in &mut q.video_tracks[1].items {
+            let g = ctx.alloc();
+            v.link = Some(g);
+            let src = q.audio_tracks[0].items.iter().find(|a| a.start == v.start).cloned();
+            if let Some(mut a) = src {
+                a.id = ClipId(ctx.alloc());
+                a.link = Some(g);
+                a.duration = v.duration;
+                a.item = v.item;
+                a.source_in = v.source_in;
+                sound.push(a);
+            }
+        }
+        q.audio_tracks[2].items = sound;
+        Ok(())
+    })
+    .unwrap();
+    let a3 = s.active_sequence().unwrap().audio_tracks[2].clone();
+    assert!(!a3.items.is_empty());
+    let people = json!([{"name": "A", "video": "V1", "audio": "A1"}, {"name": "B", "video": "V2", "audio": "A2"}]);
+    let shots = json!([{"start": 0, "end": 30, "person": 0}, {"start": 30, "end": 70, "person": 1}, {"start": 70, "end": 100, "person": 0}]);
+    let r = s.execute("edit.autoCutPlace", json!({"people": people, "shots": shots, "markers": false})).unwrap();
+    assert_eq!(r["soundTracks"], 1, "{r}");
+    assert_eq!(r["muted"], json!([a3.name.clone()]));
+    let q = s.active_sequence().unwrap();
+    let cut = q.video_tracks.iter().find(|t| t.name == TRACK_NAME).unwrap();
+    let snd = q.audio_tracks.iter().find(|t| t.name == TRACK_NAME).expect("the Auto Cut audio track");
+    let rate = q.settings.frame_rate;
+    let (b0, b1) = (rate.snap_nearest(Tick::from_seconds_f64(1.5)), rate.snap_nearest(Tick::from_seconds_f64(3.5)));
+    // sound only where B's view is shown, matching B's picture piece for piece, linked to it
+    assert!(!snd.items.is_empty());
+    for a in &snd.items {
+        assert!(a.start >= b0 && a.end() <= b1, "{:?}", (a.start, a.end()));
+        let v = cut.items.iter().find(|v| v.start == a.start && v.duration == a.duration).expect("a matching picture piece");
+        assert!(v.link.is_some() && v.link == a.link);
+        let orig = a3.items.iter().find(|o| o.start <= a.start && a.start < o.end()).unwrap();
+        assert_eq!(a.source_in, orig.source_in + (a.start - orig.start));
+    }
+    let covered: Tick = snd.items.iter().fold(Tick::ZERO, |acc, a| acc + a.duration);
+    assert_eq!(covered, b1 - b0);
+    // A's view has no sound of its own (A1 is a microphone): its pieces stay unlinked; mics untouched
+    assert!(cut.items.iter().filter(|v| v.end() <= b0).all(|v| v.link.is_none()));
+    assert!(!q.audio_tracks[0].muted && !q.audio_tracks[1].muted);
+    assert!(q.audio_tracks.iter().find(|t| t.id == a3.id).unwrap().muted);
+    q.check().unwrap();
+    // run again: still one sound track; undo puts the mute back
+    s.execute("edit.autoCutPlace", json!({"people": people, "shots": shots, "markers": false, "muteViews": false})).unwrap();
+    assert_eq!(s.active_sequence().unwrap().audio_tracks.iter().filter(|t| t.name == TRACK_NAME).count(), 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let q = s.active_sequence().unwrap();
+    assert!(q.audio_tracks.iter().all(|t| t.name != TRACK_NAME));
+    assert!(!q.audio_tracks.iter().find(|t| t.id == a3.id).unwrap().muted);
+}
+
+#[test]
 fn the_whole_command_measures_the_microphones() {
     let mut s = demo();
     let r = s.execute("edit.autoCut", json!({"people": [{"name": "A", "video": "V1", "audio": "A1"}, {"name": "B", "video": "V2", "audio": "A2"}]})).unwrap();

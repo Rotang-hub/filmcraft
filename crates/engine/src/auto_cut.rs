@@ -17,6 +17,10 @@
 //!   seconds and each at most 4 seconds long (a lively stretch must not become one long shot). A
 //!   marker names each reaction for review.
 //! - **No jitter.** A shot shorter than `minShot` joins the shot before it (reaction shots stay).
+//! - **Sound follows the picture.** Each view clip's own sound (its linked audio clips, or the same
+//!   media placed with it; never a microphone track) is cut the same way onto the "Auto Cut" audio
+//!   track(s), linked to the picture. With `muteViews` (on by default) the original view sound
+//!   tracks are muted so it is not heard twice. Microphones stay as they are.
 //! - **Dead air goes.** With `trim` (on by default), every stretch where nobody talks for at least
 //!   `minSilence` is cut out of every unlocked track (sound with picture, captions too), keeping
 //!   `pad` on each side and never inside a big moment.
@@ -32,12 +36,13 @@
 //!
 //! Kept in its own file so upstream updates rarely touch it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde_json::{Value, json};
 
+use filmcraft_edit::EditCtx;
 use filmcraft_media::SharedSource;
-use filmcraft_project::{ClipId, MarkerId, Track, TrackId, TrackKind};
+use filmcraft_project::{ClipId, MarkerId, Sequence, Track, TrackId, TrackItem, TrackKind};
 use filmcraft_project::{Label, Marker, MarkerKind};
 use filmcraft_time::Tick;
 
@@ -46,6 +51,8 @@ use crate::{EngineError, Result, Session};
 
 /// The cut's own track.
 pub const TRACK_NAME: &str = "Auto Cut";
+/// At most this many sound tracks follow the cut (a view clip's linked audio clips).
+const MAX_SOUND_TRACKS: usize = 8;
 /// Measuring frame (seconds).
 pub const FRAME: f64 = 0.05;
 /// Sample rate the microphones are read at (enough for voice levels).
@@ -510,8 +517,9 @@ pub fn place(
     reactions: &[Reaction],
     cuts: &[(usize, usize)],
     range: (Tick, Tick),
-    markers: bool,
+    opts: PlaceOpts,
 ) -> Result<Value> {
+    let PlaceOpts { markers, mute_views } = opts;
     let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
     let rate = seq.settings.frame_rate;
     let at = |f: usize| rate.snap_nearest(range.0 + Tick::from_seconds_f64(f as f64 * FRAME)).clamp(range.0, range.1);
@@ -540,33 +548,59 @@ pub fn place(
                 below
             }
         };
+        let mics: HashSet<TrackId> = people.iter().flat_map(|p| p.audio.iter().copied()).collect();
+        // each view clip's own sound: its linked audio (or the same media placed with it), never a microphone
+        let sound_of = |q: &Sequence, it: &TrackItem| -> Vec<(usize, TrackItem)> {
+            q.audio_tracks
+                .iter()
+                .filter(|t| !mics.contains(&t.id) && !t.name.starts_with(TRACK_NAME))
+                .flat_map(|t| {
+                    t.items
+                        .iter()
+                        .filter(|x| match (it.link, x.link) {
+                            (Some(a), Some(b)) => a == b,
+                            _ => x.item == it.item && x.start == it.start && x.source_in == it.source_in,
+                        })
+                        .map(|x| (t.id, x.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .enumerate()
+                .map(|(k, (_, x))| (k, x))
+                .collect()
+        };
+        let mut view_sound: HashSet<TrackId> = HashSet::new();
         let mut placed = Vec::new();
+        let mut sound: Vec<Vec<TrackItem>> = Vec::new();
         let mut per: HashMap<usize, usize> = HashMap::new();
         for (a, b, p, _) in &shots {
             let Some(person) = people.get(*p) else { continue };
             let Some(view) = q.video_tracks.iter().find(|t| t.id == person.video) else { continue };
             let pieces: Vec<_> = view.items.iter().filter(|it| it.start < *b && it.end() > *a).cloned().collect();
             for it in pieces {
-                // a copy of the clip, cut down to the shot
-                let mut tmp = Track::new(TrackId(0), TrackKind::Video, String::new());
-                let mut piece = it.clone();
-                piece.id = ClipId(ctx.alloc());
-                piece.link = None;
-                tmp.items.push(piece);
-                let mut links = HashMap::new();
-                if it.start < *a {
-                    filmcraft_edit::split_track_at(&mut tmp, *a, ctx, &mut links);
-                    tmp.items.retain(|x| x.start >= *a);
+                let partners = sound_of(q, &it);
+                for t in &q.audio_tracks {
+                    if partners.iter().any(|(_, x)| t.items.iter().any(|y| y.id == x.id)) {
+                        view_sound.insert(t.id);
+                    }
                 }
-                if it.end() > *b {
-                    filmcraft_edit::split_track_at(&mut tmp, *b, ctx, &mut links);
-                    tmp.items.retain(|x| x.end() <= *b);
-                }
-                for mut x in tmp.items {
-                    x.link = None;
+                // picture and sound of the shot, linked to each other
+                let link = if partners.is_empty() { None } else { Some(ctx.alloc()) };
+                for mut x in slice(&it, *a, *b, TrackKind::Video, ctx) {
+                    x.link = link;
                     placed.push(x.id);
                     if let Some(t) = q.video_tracks.get_mut(idx) {
                         t.items.push(x);
+                    }
+                }
+                for (k, x) in partners.into_iter().take(MAX_SOUND_TRACKS) {
+                    while sound.len() <= k {
+                        sound.push(Vec::new());
+                    }
+                    for mut y in slice(&x, *a, *b, TrackKind::Audio, ctx) {
+                        y.link = link;
+                        if let Some(v) = sound.get_mut(k) {
+                            v.push(y);
+                        }
                     }
                 }
             }
@@ -574,6 +608,37 @@ pub fn place(
         }
         if let Some(t) = q.video_tracks.get_mut(idx) {
             t.sort();
+        }
+        // the cut's sound tracks ("Auto Cut", "Auto Cut 2"…): replaced in the range, or made at the bottom
+        let template = q.audio_tracks.iter().find(|t| view_sound.contains(&t.id)).map(|t| t.channels);
+        for (k, items) in sound.into_iter().enumerate() {
+            let name = if k == 0 { TRACK_NAME.to_string() } else { format!("{TRACK_NAME} {}", k + 1) };
+            let i = match q.audio_tracks.iter().position(|t| t.name == name) {
+                Some(i) => i,
+                None => {
+                    let mut t = Track::new(TrackId(ctx.alloc()), TrackKind::Audio, name.clone());
+                    if let Some(c) = template {
+                        t.channels = c;
+                    }
+                    q.audio_tracks.push(t);
+                    q.audio_tracks.len() - 1
+                }
+            };
+            let Some(t) = q.audio_tracks.get_mut(i) else { continue };
+            if t.locked {
+                return Err(bad("edit.autoCut", format!("the {name} audio track is locked")));
+            }
+            t.items.retain(|it| it.end() <= range.0 || it.start >= range.1);
+            t.items.extend(items);
+            t.sort();
+        }
+        // the views' own sound now plays from the cut: mute the originals so it is not heard twice
+        let mut muted = Vec::new();
+        if mute_views {
+            for t in q.audio_tracks.iter_mut().filter(|t| view_sound.contains(&t.id) && !t.muted) {
+                t.muted = true;
+                muted.push(t.name.clone());
+            }
         }
         // the silences go, on every unlocked track (sound with picture), right to left
         let removed = filmcraft_edit::transcript::ripple_delete_ranges(q, cuts.clone(), ctx);
@@ -598,8 +663,50 @@ pub fn place(
         let mut counts: Vec<Value> = per.iter().filter_map(|(p, n)| people.get(*p).map(|x| json!({"name": x.name, "shots": n}))).collect();
         counts.sort_by_key(|v| v["name"].as_str().unwrap_or_default().to_string());
         st.selection.retain(|id| q.find_item(*id).is_some());
-        Ok(json!({"shots": shots.len(), "clips": placed.len(), "reactions": marks.len(), "people": counts, "cuts": cuts.len(), "removed": removed.seconds()}))
+        let sound_tracks = q.audio_tracks.iter().filter(|t| t.name.starts_with(TRACK_NAME)).count();
+        Ok(json!({"shots": shots.len(), "clips": placed.len(), "reactions": marks.len(), "people": counts, "cuts": cuts.len(), "removed": removed.seconds(), "soundTracks": sound_tracks, "muted": muted}))
     })
+}
+
+/// Switches for [`place`].
+#[derive(Clone, Copy, Debug)]
+pub struct PlaceOpts {
+    /// Add a marker at each big moment.
+    pub markers: bool,
+    /// Mute the views' original sound tracks once the Auto Cut audio track plays it.
+    pub mute_views: bool,
+}
+
+impl PlaceOpts {
+    fn from_p(p: &Value) -> Self {
+        let on = |k: &str| p.get(k).and_then(Value::as_bool).unwrap_or(true);
+        Self { markers: on("markers"), mute_views: on("muteViews") }
+    }
+}
+
+/// A copy of `it` (new ids, unlinked) cut down to `[a, b)`.
+fn slice(it: &TrackItem, a: Tick, b: Tick, kind: TrackKind, ctx: &mut EditCtx) -> Vec<TrackItem> {
+    let mut tmp = Track::new(TrackId(0), kind, String::new());
+    let mut piece = it.clone();
+    piece.id = ClipId(ctx.alloc());
+    piece.link = None;
+    tmp.items.push(piece);
+    let mut links = HashMap::new();
+    if it.start < a {
+        filmcraft_edit::split_track_at(&mut tmp, a, ctx, &mut links);
+        tmp.items.retain(|x| x.start >= a);
+    }
+    if it.end() > b {
+        filmcraft_edit::split_track_at(&mut tmp, b, ctx, &mut links);
+        tmp.items.retain(|x| x.end() <= b);
+    }
+    tmp.items
+        .into_iter()
+        .map(|mut x| {
+            x.link = None;
+            x
+        })
+        .collect()
 }
 
 /// The people of a request: `[{name, video, audio}]` (`audio` a track or a list).
@@ -674,7 +781,7 @@ fn auto_cut(s: &mut Session, p: &Value) -> Result<Value> {
     let tuning = tuning_p(p);
     let (shots, reactions) = plan(&lv, &tuning);
     let cuts = silences(&lv, &tuning, &reactions);
-    place(s, &people, &shots, &reactions, &cuts, range, p.get("markers").and_then(Value::as_bool).unwrap_or(true))
+    place(s, &people, &shots, &reactions, &cuts, range, PlaceOpts::from_p(p))
 }
 
 fn place_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -727,7 +834,7 @@ fn place_cmd(s: &mut Session, p: &Value) -> Result<Value> {
                 .collect()
         })
         .unwrap_or_default();
-    place(s, &people, &shots, &reactions, &cuts, range, p.get("markers").and_then(Value::as_bool).unwrap_or(true))
+    place(s, &people, &shots, &reactions, &cuts, range, PlaceOpts::from_p(p))
 }
 
 /// Cuts as JSON (`[{start, end}]`, frames).
@@ -753,13 +860,13 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "edit.autoCut",
             "Auto Cut to Speaker…",
-            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"]}],"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"trim":true?,"minSilence":1.0?,"pad":0.25?,"inOut":true?}"#,
+            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"]}],"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"muteViews":true?,"trim":true?,"minSilence":1.0?,"pad":0.25?,"inOut":true?}"#,
             auto_cut,
         ),
         spec(
             "edit.autoCutPlace",
             "Place Auto Cut",
-            r#"{"people":[…],"shots":[{"start":frame,"end":frame,"person":n,"reaction":bool?}],"reactions":[{"start","end","person"}]?,"cuts":[{"start":frame,"end":frame}]?,"markers":true?,"inOut":true?}"#,
+            r#"{"people":[…],"shots":[{"start":frame,"end":frame,"person":n,"reaction":bool?}],"reactions":[{"start","end","person"}]?,"cuts":[{"start":frame,"end":frame}]?,"markers":true?,"muteViews":true?,"inOut":true?}"#,
             place_cmd,
         ),
     ]

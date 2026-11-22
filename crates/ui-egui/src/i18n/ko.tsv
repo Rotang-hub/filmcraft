@@ -3803,3 +3803,6 @@
 	Keep before and after words	말 앞뒤 여유
 	Every track is cut together, so the sound stays with the picture.	모든 트랙을 함께 잘라서 소리와 화면이 같이 잘립니다.
 	{n} silences cut ({secs} sec)	침묵 {n}곳 잘라냄 ({secs}초)
+	the views have no sound of their own linked (only microphones), so no Auto Cut audio track	화면 클립에 연결된 소리가 마이크 트랙뿐이라 Auto Cut 오디오 트랙을 만들지 않음
+	muted the original view sound: {tracks}	원래 화면 소리 음소거: {tracks}
+	Mute the views' original sound (the Auto Cut audio track plays it)	원래 화면 소리 음소거 (Auto Cut 오디오 트랙에서 재생)
