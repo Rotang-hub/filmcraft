@@ -4240,6 +4240,8 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::speaker_captions::commands());
     // Fork: reorder a clip's added effects (drag in Effect Controls)
     v.extend(crate::effect_order::commands());
+    // Fork: automatic cuts to whoever is talking
+    v.extend(crate::auto_cut::commands());
     // Edit ▸ Label ▸ <colour>, Paste Attributes, subclips, Video / Audio Options, Replace With Clip…
     // and their menu order
     crate::clip_ops::apply_layout(&mut v);

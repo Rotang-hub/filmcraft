@@ -53,7 +53,7 @@ impl Default for Settings {
 }
 
 impl Settings {
-    fn load(path: Option<&Path>) -> Self {
+    pub(crate) fn load(path: Option<&Path>) -> Self {
         use std::io::Read as _;
         let read = |p: &Path| -> Option<Settings> {
             let mut bytes = Vec::new();

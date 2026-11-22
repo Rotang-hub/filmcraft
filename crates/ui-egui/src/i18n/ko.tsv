@@ -3774,3 +3774,23 @@
 	no preset	프리셋 없음
 	✓ preset	✓ 프리셋
 	Made {n} captions ({k} while someone else was talking)	자막 {n}개를 만들었어요 (동시에 말한 자막 {k}개)
+# Fork: auto cut.
+	The microphone tracks have no clips	마이크 트랙에 클립이 없어요
+	Listening to the microphones…	마이크 소리를 분석하는 중…
+	Auto Cut: {n} shots, {k} big moments marked	자동 컷: 컷 {n}개, 큰 장면 {k}개 표시
+	Open a sequence to make an auto cut.	시퀀스를 열면 자동 컷을 만들 수 있어요.
+	People: their view and their microphone	사람별 화면과 마이크
+	Fill In	자동 채우기
+	Name the people in the Speaker Captions panel first (who speaks on each audio track)	먼저 화자별 자막 패널에서 오디오 트랙별 화자를 지정하세요
+	Add Person	사람 추가
+	Mic	마이크
+	Shortest shot	최소 컷 길이
+	Show big moments from whoever reacts first	큰 장면은 먼저 반응한 사람 화면으로
+	Build-up before it	장면 앞 빌드업
+	Hold after it	장면 뒤 유지
+	Mark big moments on the timeline	큰 장면에 마커 표시
+	With In and Out marked, only that part is cut.	시작·종료 표시(In/Out)가 있으면 그 구간만 잘라요.
+	Make Auto Cut	자동 컷 만들기
+	The cut goes on its own "Auto Cut" track; your tracks are not changed. Running it again replaces it.	컷은 따로 만든 "Auto Cut" 트랙에 들어가고, 기존 트랙은 그대로예요. 다시 실행하면 새로 바뀌어요.
+	Auto Cut	자동 컷
+	sec	초

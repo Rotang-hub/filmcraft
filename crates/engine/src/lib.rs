@@ -63,6 +63,8 @@ pub mod source_monitor;
 pub mod speaker_captions;
 // Fork: reorder a clip's added effects.
 pub mod effect_order;
+// Fork: automatic cuts to whoever is talking.
+pub mod auto_cut;
 pub mod sync;
 pub mod transcript;
 pub mod trim;
