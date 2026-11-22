@@ -93,7 +93,7 @@ struct Job {
     label: String,
     progress: f32,
     cancel: AtomicBool,
-    done: Option<Result<(Vec<Shot>, Vec<Reaction>), String>>,
+    done: Option<Result<(Vec<Shot>, Vec<Reaction>, Vec<f32>), String>>,
 }
 
 #[derive(Clone, Default)]
@@ -171,7 +171,8 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
                 !g.cancel.load(Ordering::Relaxed)
             })
             .map_err(|e| e.to_string())?;
-            Ok(ac::plan(&lv, &tuning))
+            let (shots, reactions) = ac::plan(&lv, &tuning);
+            Ok((shots, reactions, ac::talk_share(&lv)))
         }))
         .unwrap_or_else(|_| Err("the auto cut worker stopped unexpectedly".into()));
         lock(&j).done = Some(r);
@@ -182,8 +183,8 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
     Ok((job, req))
 }
 
-fn finish(app: &mut FilmcraftApp, result: Result<(Vec<Shot>, Vec<Reaction>), String>, req: Option<Value>) {
-    let (shots, reactions) = match result {
+fn finish(app: &mut FilmcraftApp, result: Result<(Vec<Shot>, Vec<Reaction>, Vec<f32>), String>, req: Option<Value>) {
+    let (shots, reactions, share) = match result {
         Ok(x) => x,
         Err(e) => {
             app.ui.status = e;
@@ -191,13 +192,23 @@ fn finish(app: &mut FilmcraftApp, result: Result<(Vec<Shot>, Vec<Reaction>), Str
         }
     };
     let Some(mut req) = req else { return };
+    // how much each microphone is heard talking: a check that the right tracks were picked
+    let names: Vec<String> = req["people"].as_array().map(|a| a.iter().map(|p| p["name"].as_str().unwrap_or("?").to_string()).collect()).unwrap_or_default();
+    let heard: Vec<String> = names.iter().zip(&share).map(|(n, s)| format!("{n} {:.0}%", s * 100.0)).collect();
+    let odd: Vec<&String> = names.iter().zip(&share).filter(|(_, s)| **s > 0.7 || **s < 0.01).map(|(n, _)| n).collect();
     let (s, r) = ac::shots_json(&shots, &reactions);
     req["shots"] = s;
     req["reactions"] = r;
-    app.ui.status = match app.session.execute("edit.autoCutPlace", req) {
+    let mut status = match app.session.execute("edit.autoCutPlace", req) {
         Ok(v) => tlf!("Auto Cut: {n} shots, {k} big moments marked", n = v["shots"].as_u64().unwrap_or(0), k = v["reactions"].as_u64().unwrap_or(0)),
         Err(e) => e.to_string(),
     };
+    status.push_str(&format!(" · {} {}", tl!("Heard talking:"), heard.join(", ")));
+    if !odd.is_empty() {
+        let list = odd.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ");
+        status.push_str(&format!(" · {}", tlf!("check the microphone track of {who}", who = list)));
+    }
+    app.ui.status = status;
 }
 
 fn track_combo(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, value: &mut String, names: &[String]) {

@@ -182,3 +182,52 @@ fn bad_requests_are_errors_not_crashes() {
         assert!(s.execute("edit.autoCutPlace", json!({"people": people, "shots": shots})).is_err());
     }
 }
+
+/// A tiny deterministic random source for the busy-scene test.
+fn lcg(seed: &mut u64) -> f64 {
+    *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+    (*seed >> 11) as f64 / (1u64 << 53) as f64
+}
+
+#[test]
+fn a_busy_scene_with_laughs_all_the_time_still_cuts_between_people() {
+    // regression: frequent laughter merged into one endless "big moment" that held one view
+    let secs = 180.0;
+    let n = (secs / FRAME) as usize;
+    let mut rows = vec![vec![-62.0f32; n]; 4];
+    let mut seed = 7u64;
+    let mut t = 0.0;
+    // people take turns talking (with mid-word dips), each 2–6 s
+    while t < secs {
+        let p = (lcg(&mut seed) * 4.0) as usize % 4;
+        let len = 2.0 + lcg(&mut seed) * 4.0;
+        for f in ((t / FRAME) as usize)..(((t + len) / FRAME) as usize).min(n) {
+            rows[p][f] = if f % 7 == 0 { -45.0 } else { -24.0 + (lcg(&mut seed) * 6.0) as f32 };
+        }
+        t += len + lcg(&mut seed) * 0.6;
+    }
+    // laughs every 3–7 s: two or three people loud for about a second
+    let mut t = 3.0;
+    while t < secs {
+        let k = 2 + (lcg(&mut seed) * 2.0) as usize;
+        for j in 0..k {
+            let p = (j + (lcg(&mut seed) * 4.0) as usize) % 4;
+            let off = (lcg(&mut seed) * 0.3 / FRAME) as usize;
+            for f in ((t / FRAME) as usize + off)..(((t + 1.0) / FRAME) as usize).min(n) {
+                rows[p][f] = -8.0;
+            }
+        }
+        t += 3.0 + lcg(&mut seed) * 4.0;
+    }
+    let (shots, reactions) = plan(&rows, &Tuning::default());
+    let mut people: Vec<usize> = shots.iter().map(|s| s.person).collect();
+    people.sort_unstable();
+    people.dedup();
+    assert_eq!(people.len(), 4, "everyone gets shots: {shots:?}");
+    let longest = shots.iter().map(|s| s.end - s.start).max().unwrap_or(0) as f64 * FRAME;
+    assert!(longest < 25.0, "no endless shot: {longest} s");
+    let reaction_time: usize = shots.iter().filter(|s| s.reaction).map(|s| s.end - s.start).sum();
+    assert!((reaction_time as f64) < 0.5 * n as f64, "big moments are moments, not the whole scene");
+    assert!(reactions.len() <= (secs / 12.0) as usize + 1);
+    assert!(shots.len() > 20, "it cuts: {} shots", shots.len());
+}

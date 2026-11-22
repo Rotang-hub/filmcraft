@@ -5,14 +5,17 @@
 //! well above their own background (each microphone gets its own threshold, so a quiet voice
 //! counts as much as a loud one and voices leaking in from a call stay below it). The cut follows:
 //!
-//! - **The person talking.** A shot stays on its person while they talk. When they stop and
-//!   someone else is talking, it cuts to them; when two talk at once, whoever started first keeps
-//!   the shot. Nobody talking: the shot holds.
+//! - **The person talking.** How far each person is above their own threshold, smoothed over a
+//!   second, says who is talking. A shot stays on its person while they talk; it cuts when they
+//!   stop and someone else talks, or when someone else is clearly louder (a close call keeps
+//!   whoever started first). Nobody talking: the shot holds.
 //! - **Big moments.** A burst of loud voices (two or more people at once, or one person far above
 //!   their usual level: a scream, an outburst of laughter) is a reaction. The view of whoever
 //!   reacted first (usually the person something happened to) is shown from `buildup` seconds
 //!   before it until `hold` seconds after it ends, whoever is talking: the lead-up and the payoff
-//!   are seen from the view where it happens. A marker names each reaction for review.
+//!   are seen from the view where it happens. Only the strongest are kept, at most one every 12
+//!   seconds and each at most 4 seconds long (a lively stretch must not become one long shot). A
+//!   marker names each reaction for review.
 //! - **No jitter.** A shot shorter than `minShot` joins the shot before it (reaction shots stay).
 //!
 //! The cut is built on a video track of its own, "Auto Cut", above the people's tracks (below any
@@ -303,21 +306,46 @@ pub fn plan(levels: &[Vec<f32>], tuning: &Tuning) -> (Vec<Shot>, Vec<Reaction>) 
     let lvl = |p: usize, f: usize| levels.get(p).and_then(|r| r.get(f)).copied().unwrap_or(SILENT);
     let talks = |p: usize, f: usize| voices.get(p).and_then(|v| v.talking.get(f)).copied().unwrap_or(false);
 
-    // who has the shot in each frame
+    // who has the shot in each frame: how far above their own threshold each person is,
+    // averaged over the last second; the shot changes when someone else is clearly the one talking
+    // (a close call keeps whoever started first)
+    let half = (0.5 / FRAME) as usize;
+    let score: Vec<Vec<f32>> = (0..voices.len())
+        .map(|p| {
+            let raw: Vec<f32> = (0..n).map(|f| if talks(p, f) { (lvl(p, f) - voices[p].threshold).max(0.5) } else { 0.0 }).collect();
+            let mut pre = vec![0.0f64; n + 1];
+            for f in 0..n {
+                pre[f + 1] = pre[f] + raw[f] as f64;
+            }
+            // the last `half`·2 frames (what has been heard so far, so cuts never anticipate)
+            (0..n)
+                .map(|f| {
+                    let a = (f + 1).saturating_sub(2 * half + 1);
+                    ((pre[f + 1] - pre[a]) / (f + 1 - a).max(1) as f64) as f32
+                })
+                .collect()
+        })
+        .collect();
+    let sc = |p: usize, f: usize| score.get(p).and_then(|r| r.get(f)).copied().unwrap_or(0.0);
+    const CLEARLY: f32 = 4.0;
     let mut who: Vec<Option<usize>> = vec![None; n];
     let mut cur: Option<usize> = None;
     for (f, slot) in who.iter_mut().enumerate() {
-        let speaking: Vec<usize> = (0..voices.len()).filter(|p| talks(*p, f)).collect();
-        if !cur.is_some_and(|c| speaking.contains(&c)) {
-            // the one who started first; at a tie, the loudest above their own threshold
-            if let Some(p) = speaking.iter().copied().min_by(|a, b| {
+        let best = (0..voices.len()).filter(|p| talks(*p, f)).max_by(|a, b| {
+            sc(*a, f).total_cmp(&sc(*b, f)).then_with(|| {
+                // equal: the one who started first
                 let ra = voices[*a].run_start.get(f).copied().unwrap_or(f);
                 let rb = voices[*b].run_start.get(f).copied().unwrap_or(f);
-                ra.cmp(&rb).then_with(|| (lvl(*b, f) - voices[*b].threshold).total_cmp(&(lvl(*a, f) - voices[*a].threshold)))
-            }) {
-                cur = Some(p);
-            }
-        }
+                rb.cmp(&ra)
+            })
+        });
+        cur = match (cur, best) {
+            (_, None) => cur,
+            (None, b) => b,
+            (Some(c), Some(b)) if !talks(c, f) => Some(b),
+            (Some(c), Some(b)) if sc(b, f) > sc(c, f) + CLEARLY => Some(b),
+            (c, _) => c,
+        };
         *slot = cur;
     }
     // before anyone talks: the first person who does
@@ -330,31 +358,42 @@ pub fn plan(levels: &[Vec<f32>], tuning: &Tuning) -> (Vec<Shot>, Vec<Reaction>) 
         }
     }
 
-    // reactions: two or more loud at once, or one screaming
+    // big moments: two or more people loud at the same moment, or one screaming. The strongest
+    // are kept, at most one per `SPACING`, each shown for at most `LONGEST`
     let mut reactions = Vec::new();
     if tuning.reactions {
+        const SPACING: f64 = 12.0;
+        const LONGEST: f64 = 4.0;
         let loud = |p: usize, f: usize| lvl(p, f) > voices[p].loud;
+        let near = (0.25 / FRAME) as usize;
         let hot: Vec<bool> = (0..n)
             .map(|f| {
-                let lo = f.saturating_sub(10);
-                let hi = (f + 10).min(n - 1);
+                let lo = f.saturating_sub(near);
+                let hi = (f + near).min(n - 1);
                 let many = (0..voices.len()).filter(|p| (lo..=hi).any(|g| loud(*p, g))).count() >= 2 && (0..voices.len()).any(|p| loud(p, f));
                 many || (0..voices.len()).any(|p| lvl(p, f) > voices[p].scream)
             })
             .collect();
         let mut hot = hot;
-        close_gaps(&mut hot, 10);
-        drop_short(&mut hot, 4);
-        let gap = (8.0 / FRAME) as usize;
+        close_gaps(&mut hot, 6);
+        drop_short(&mut hot, 6);
+        let mut found: Vec<(f32, Reaction)> = Vec::new();
         for (s, e) in runs(&hot) {
             // who got loud first, looking a little before the burst
             let look = s.saturating_sub(10);
             let Some(p) = (0..voices.len()).filter_map(|p| (look..e).find(|f| loud(p, *f)).map(|f| (f, p))).min().map(|x| x.1) else { continue };
-            match reactions.last_mut() {
-                Some(Reaction { end, .. }) if s < *end + gap => *end = e,
-                _ => reactions.push(Reaction { start: s, end: e, person: p }),
+            let strength: f32 = (0..voices.len()).map(|q| (s..e).map(|f| (lvl(q, f) - voices[q].loud).max(0.0)).fold(0.0, f32::max)).sum();
+            let e = e.min(s + (LONGEST / FRAME) as usize);
+            found.push((strength, Reaction { start: s, end: e, person: p }));
+        }
+        found.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let spacing = (SPACING / FRAME) as usize;
+        for (_, r) in found {
+            if reactions.iter().all(|k: &Reaction| r.start.abs_diff(k.start) >= spacing) {
+                reactions.push(r);
             }
         }
+        reactions.sort_by_key(|r| r.start);
         let buildup = (tuning.buildup.max(0.0) / FRAME) as usize;
         let hold = (tuning.hold.max(0.0) / FRAME) as usize;
         for r in &reactions {
@@ -399,6 +438,17 @@ pub fn plan(levels: &[Vec<f32>], tuning: &Tuning) -> (Vec<Shot>, Vec<Reaction>) 
         }
     }
     (out, reactions)
+}
+
+/// How much of the time each person is heard talking (0–1), to check the microphones.
+pub fn talk_share(levels: &[Vec<f32>]) -> Vec<f32> {
+    levels
+        .iter()
+        .map(|l| {
+            let v = voice(l);
+            v.talking.iter().filter(|t| **t).count() as f32 / v.talking.len().max(1) as f32
+        })
+        .collect()
 }
 
 /// Build the cut on the "Auto Cut" track (replacing what it held in `range`), one undo step.

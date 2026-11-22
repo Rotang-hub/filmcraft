@@ -3796,3 +3796,5 @@
 	sec	초
 	note: no captions	메모 (자막 안 만듦)
 	No head-caption preset has this name, so this track gets no captions. Use it to note what the track is (a call, game sound…).	이 이름의 머리 자막 프리셋이 없어서 이 트랙은 자막을 만들지 않아요. 트랙 설명(디스코드, 게임 소리 등)을 적어 두는 용도로 쓰세요.
+	Heard talking:	말한 비율:
+	check the microphone track of {who}	{who}의 마이크 트랙을 확인하세요
