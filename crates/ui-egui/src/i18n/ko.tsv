@@ -3806,3 +3806,5 @@
 	the views have no sound of their own linked (only microphones), so no Auto Cut audio track	화면 클립에 연결된 소리가 마이크 트랙뿐이라 Auto Cut 오디오 트랙을 만들지 않음
 	muted the original view sound: {tracks}	원래 화면 소리 음소거: {tracks}
 	Mute the views' original sound (the Auto Cut audio track plays it)	원래 화면 소리 음소거 (Auto Cut 오디오 트랙에서 재생)
+	Game sound	게임 소리
+	Other voice tracks (Discord…): kept whole, their talk is never cut	다른 목소리 트랙 (디스코드 등): 통째로 유지, 이 트랙의 말소리는 자르지 않음

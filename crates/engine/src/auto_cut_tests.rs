@@ -18,6 +18,10 @@ fn quiet_tuning() -> Tuning {
     Tuning { reactions: false, ..Tuning::default() }
 }
 
+fn people_only(rows: &[Vec<f32>]) -> Heard<'_> {
+    Heard { people: rows, voices: &[], game: &[] }
+}
+
 fn people_of(shots: &[Shot]) -> Vec<usize> {
     shots.iter().map(|s| s.person).collect()
 }
@@ -111,8 +115,8 @@ fn long_silences_are_cut_with_padding_and_short_pauses_stay() {
     // A talks 0–5 s, a 0.5 s pause, 5.5–8 s; nobody until B at 12–18 s; then quiet to the end
     let a = row(n, &[(0.0, 5.0, -20.0), (5.5, 8.0, -20.0)]);
     let b = row(n, &[(12.0, 18.0, -20.0)]);
-    let tuning = quiet_tuning();
-    let cuts = silences(&[a.clone(), b.clone()], &tuning, &[]);
+    let tuning = Tuning { min_silence: 1.0, pad: 0.25, ..quiet_tuning() };
+    let cuts = silences(&people_only(&[a.clone(), b.clone()]), &tuning, &[], &[]);
     let secs: Vec<(f64, f64)> = cuts.iter().map(|(x, y)| (*x as f64 * FRAME, *y as f64 * FRAME)).collect();
     assert_eq!(cuts.len(), 2, "{secs:?}");
     // the gap 8–12 s goes, less the padding (and the hang-on after words)
@@ -123,7 +127,7 @@ fn long_silences_are_cut_with_padding_and_short_pauses_stay() {
     // the short pause inside A's talk stays
     assert!(secs.iter().all(|(x, y)| *y <= 5.0 || *x >= 5.5), "{secs:?}");
     // off: nothing is cut
-    assert!(silences(&[a, b], &Tuning { trim: false, ..tuning }, &[]).is_empty());
+    assert!(silences(&people_only(&[a, b]), &Tuning { trim: false, ..tuning }, &[], &[]).is_empty());
 }
 
 #[test]
@@ -133,7 +137,7 @@ fn a_big_moment_and_its_build_up_are_never_cut() {
     let b = row(n, &[]);
     let r = Reaction { start: (10.0 / FRAME) as usize, end: (11.0 / FRAME) as usize, person: 1 };
     let tuning = Tuning { buildup: 2.5, hold: 1.0, ..quiet_tuning() };
-    let cuts = silences(&[a, b], &tuning, &[r]);
+    let cuts = silences(&people_only(&[a, b]), &tuning, &[r], &[]);
     let keep = ((7.5 / FRAME) as usize, (12.0 / FRAME) as usize);
     assert!(cuts.iter().all(|(x, y)| *y <= keep.0 || *x >= keep.1), "{cuts:?}");
     assert!(cuts.len() == 2, "before and after the moment: {cuts:?}");
@@ -169,6 +173,145 @@ fn cutting_silences_cuts_sound_and_picture_together_in_one_undo() {
     let q = s.active_sequence().unwrap();
     assert_eq!(q.video_tracks[0].items, before.video_tracks[0].items);
     assert_eq!(q.audio_tracks[0].items, before.audio_tracks[0].items);
+}
+
+#[test]
+fn talk_on_a_discord_track_loud_game_moments_and_markers_are_not_cut() {
+    let n = (40.0 / FRAME) as usize;
+    // the microphones: A at 0–3 s and 36–40 s only
+    let a = row(n, &[(0.0, 3.0, -20.0), (36.0, 40.0, -20.0)]);
+    let b = row(n, &[]);
+    let tuning = Tuning { min_silence: 1.0, pad: 0.25, buildup: 3.0, hold: 1.0, ..quiet_tuning() };
+    let rows = [a.clone(), b.clone()];
+    let all = silences(&people_only(&rows), &tuning, &[], &[]);
+    assert_eq!(all.len(), 1, "{all:?}");
+    // a friend talks on the Discord track at 5–9 s; the game blasts at 20–21 s (music around −40)
+    let discord = row(n, &[(5.0, 9.0, -25.0)]);
+    let mut game = row(n, &[(0.0, 40.0, -40.0)]);
+    for x in game.iter_mut().skip((20.0 / FRAME) as usize).take((1.0 / FRAME) as usize) {
+        *x = -15.0;
+    }
+    let voices = [discord];
+    let games = [game];
+    let heard = Heard { people: &rows, voices: &voices, game: &games };
+    // and the user marked 30 s
+    let keep = [((29.0 / FRAME) as usize, (31.5 / FRAME) as usize)];
+    let cuts = silences(&heard, &tuning, &[], &keep);
+    let secs: Vec<(f64, f64)> = cuts.iter().map(|(x, y)| (*x as f64 * FRAME, *y as f64 * FRAME)).collect();
+    let kept = |a: f64, b: f64| secs.iter().all(|(x, y)| *y <= a || *x >= b);
+    assert!(kept(5.0, 9.0), "the friend's talk stays: {secs:?}");
+    assert!(kept(17.0, 22.0), "the game moment and its build-up stay: {secs:?}");
+    assert!(kept(29.0, 31.5), "the marked part stays: {secs:?}");
+    assert!(!secs.is_empty(), "the rest of the silence still goes");
+}
+
+#[test]
+fn markers_become_kept_ranges_but_reaction_markers_do_not() {
+    let mut s = demo();
+    s.edit_sequence("test", |q, ctx, _| {
+        for (t, name) in [(2.0, "keep"), (3.0, "Reaction: B")] {
+            q.markers.push(Marker {
+                url: String::new(),
+                author: String::new(),
+                custom_color: None,
+                id: MarkerId(ctx.alloc()),
+                start: Tick::from_seconds_f64(t),
+                duration: Tick::ZERO,
+                name: name.into(),
+                comment: String::new(),
+                kind: MarkerKind::Comment,
+                color: Label::Rose,
+            });
+        }
+        Ok(())
+    })
+    .unwrap();
+    let end = s.active_sequence().unwrap().duration();
+    let keep = keep_ranges(&s, (Tick::ZERO, end), &Tuning { buildup: 1.0, hold: 0.5, ..Tuning::default() });
+    assert!(keep.contains(&(20, 51)), "{keep:?}");
+    assert!(!keep.iter().any(|(a, _)| *a == 40), "a Reaction marker keeps nothing: {keep:?}");
+}
+
+/// Adds audio tracks until there are `n`.
+fn audio_tracks(s: &mut Session, n: usize) {
+    s.edit_sequence("test", |q, ctx, _| {
+        while q.audio_tracks.len() < n {
+            let k = q.audio_tracks.len() + 1;
+            q.audio_tracks.push(Track::new(TrackId(ctx.alloc()), TrackKind::Audio, format!("Audio {k}")));
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_discord_track_linked_to_the_view_stays_whole_and_only_the_game_sound_follows() {
+    // 로탱's recording: V1 linked to A1 (Discord), A2 (microphone) and A3 (game sound); B: V2 + A4
+    let mut s = demo();
+    audio_tracks(&mut s, 4);
+    s.edit_sequence("test", |q, ctx, _| {
+        let base = q.audio_tracks[0].items.clone();
+        let mut tracks: [Vec<_>; 4] = Default::default();
+        for v in &mut q.video_tracks[0].items {
+            let g = ctx.alloc();
+            v.link = Some(g);
+            let Some(src) = base.iter().find(|a| a.start == v.start) else { continue };
+            for (k, t) in tracks.iter_mut().enumerate().take(3) {
+                let mut a = src.clone();
+                a.id = ClipId(ctx.alloc());
+                a.link = Some(g);
+                a.duration = v.duration;
+                a.name = format!("rec {k}");
+                t.push(a);
+            }
+        }
+        for v in &mut q.video_tracks[1].items {
+            let g = ctx.alloc();
+            v.link = Some(g);
+            if let Some(src) = base.iter().find(|a| a.start == v.start) {
+                let mut a = src.clone();
+                a.id = ClipId(ctx.alloc());
+                a.link = Some(g);
+                a.duration = v.duration;
+                tracks[3].push(a);
+            }
+        }
+        for (t, items) in q.audio_tracks.iter_mut().zip(tracks) {
+            t.items = items;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active_sequence().unwrap().clone();
+    let people = json!([{"name": "로탱", "video": "V1", "audio": "A2"}, {"name": "B", "video": "V2", "audio": "A4"}]);
+    let extra = extra_p(&s, &json!({"voices": ["A1"]}), &people_p(&s, &json!({"people": people})).unwrap()).unwrap();
+    assert_eq!(extra.voices, [before.audio_tracks[0].id]);
+    assert_eq!(extra.game, [before.audio_tracks[2].id], "the game sound is found from the links");
+    let shots = json!([{"start": 0, "end": 40, "person": 0}, {"start": 40, "end": 100, "person": 1}]);
+    let r = s.execute("edit.autoCutPlace", json!({"people": people, "voices": ["A1"], "shots": shots, "markers": false})).unwrap();
+    assert_eq!(r["soundTracks"], 1, "{r}");
+    assert_eq!(r["muted"], json!([before.audio_tracks[2].name.clone()]), "only the game sound is muted");
+    let q = s.active_sequence().unwrap();
+    // Discord and the microphones play whole, as before
+    for k in [0, 1, 3] {
+        assert_eq!(q.audio_tracks[k].items, before.audio_tracks[k].items, "A{} untouched", k + 1);
+        assert!(!q.audio_tracks[k].muted);
+    }
+    let snd = q.audio_tracks.iter().find(|t| t.name == TRACK_NAME).unwrap();
+    assert!(snd.items.iter().all(|a| a.name == "rec 2"), "only the game sound follows the cut");
+    let two = q.settings.frame_rate.snap_nearest(Tick::from_seconds_f64(2.0));
+    assert_eq!(snd.items.iter().map(|a| a.end()).max(), Some(two));
+    // the same with the game sound named
+    let people2 = json!([{"name": "로탱", "video": "V1", "audio": "A2", "sound": "A3"}, {"name": "B", "video": "V2", "audio": "A4"}]);
+    let r = s.execute("edit.autoCutPlace", json!({"people": people2, "voices": "A1", "shots": shots, "markers": false})).unwrap();
+    assert_eq!(r["soundTracks"], 1, "{r}");
+    let q = s.active_sequence().unwrap();
+    let snd = q.audio_tracks.iter().find(|t| t.name == TRACK_NAME).unwrap();
+    assert!(!snd.items.is_empty() && snd.items.iter().all(|a| a.name == "rec 2"));
+    q.check().unwrap();
+    // a microphone cannot also be the game sound
+    let bad = json!([{"name": "로탱", "video": "V1", "audio": "A2", "sound": "A2"}, {"name": "B", "video": "V2", "audio": "A4"}]);
+    assert!(s.execute("edit.autoCutPlace", json!({"people": bad, "shots": shots})).is_err());
 }
 
 /// The demo project with a second view on V2 (a copy of V1) and microphones on A1 / A2.

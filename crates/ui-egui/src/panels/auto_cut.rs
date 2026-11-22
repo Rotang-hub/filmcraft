@@ -11,7 +11,7 @@
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
 //! `autoCut.fill`, `autoCut.add`, `autoCut.name.<n>`, `autoCut.video.<n>`, `autoCut.audio.<n>`,
 //! `autoCut.remove.<n>`, `autoCut.minShot`, `autoCut.reactions`, `autoCut.buildup`, `autoCut.hold`,
-//! `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.make`, `autoCut.cancel`.
+//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.make`, `autoCut.cancel`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
@@ -38,12 +38,16 @@ pub struct Row {
     /// "V2", "A4": by position.
     pub video: String,
     pub audio: String,
+    /// Their view's game sound track; empty: found from the view clip's links.
+    pub sound: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub people: Vec<Row>,
+    /// Other voice tracks (Discord recordings): kept whole, and talk on them is never cut.
+    pub voices: Vec<String>,
     pub min_shot: f64,
     pub buildup: f64,
     pub hold: f64,
@@ -60,6 +64,7 @@ impl Default for Settings {
         let t = ac::Tuning::default();
         Self {
             people: Vec::new(),
+            voices: Vec::new(),
             min_shot: t.min_shot,
             buildup: t.buildup,
             hold: t.hold,
@@ -86,6 +91,7 @@ impl Settings {
         };
         let mut s = path.and_then(read).unwrap_or_default();
         s.people.truncate(MAX_PEOPLE);
+        s.voices.truncate(64);
         for v in [&mut s.min_shot, &mut s.buildup, &mut s.hold, &mut s.min_silence, &mut s.pad] {
             *v = if v.is_finite() { v.clamp(0.0, 30.0) } else { 0.0 };
         }
@@ -97,9 +103,9 @@ impl Settings {
             .people
             .iter()
             .filter(|r| !r.video.is_empty() && !r.audio.is_empty())
-            .map(|r| json!({"name": if r.name.trim().is_empty() { r.video.clone() } else { r.name.trim().to_string() }, "video": r.video, "audio": r.audio}))
+            .map(|r| json!({"name": if r.name.trim().is_empty() { r.video.clone() } else { r.name.trim().to_string() }, "video": r.video, "audio": r.audio, "sound": r.sound}))
             .collect();
-        json!({"people": people, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "muteViews": self.mute_views, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad})
+        json!({"people": people, "voices": self.voices, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "muteViews": self.mute_views, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad})
     }
 }
 
@@ -140,8 +146,8 @@ fn state(app: &FilmcraftApp, ctx: &egui::Context) -> State {
 }
 
 /// Rows guessed from the Speaker Captions names and the clip names on the video tracks.
-fn fill_in(app: &FilmcraftApp) -> Vec<Row> {
-    let Some(q) = app.session.active_sequence() else { return Vec::new() };
+fn fill_in(app: &FilmcraftApp) -> (Vec<Row>, Vec<String>) {
+    let Some(q) = app.session.active_sequence() else { return (Vec::new(), Vec::new()) };
     let sc_path = app.session.prefs_path.as_ref().and_then(|p| p.parent()).map(|d| d.join(super::speaker_captions::FILE));
     let sc = super::speaker_captions::Settings::load(sc_path.as_deref());
     // only people (a name with a head-caption preset); notes such as "라스의 디스코드" are skipped
@@ -161,37 +167,43 @@ fn fill_in(app: &FilmcraftApp) -> Vec<Row> {
                 .max()
                 .map(|(_, i)| video_name(i))
                 .unwrap_or_default();
-            Row { name: name.clone(), video, audio: audio.clone() }
+            Row { name: name.clone(), video, audio: audio.clone(), sound: String::new() }
         })
         .collect();
     rows.sort_by_key(|r| r.audio.trim_start_matches('A').parse::<usize>().unwrap_or(usize::MAX));
     rows.truncate(MAX_PEOPLE);
-    rows
+    // the notes ("로탱의 디스코드"): other voices, kept whole
+    let voices: Vec<String> =
+        sc.names.iter().filter(|(audio, name)| !name.trim().is_empty() && !rows.iter().any(|r| &r.audio == *audio)).map(|(audio, _)| audio.clone()).collect();
+    (rows, voices)
 }
 
 fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Value), String> {
     let req = st.request();
     let people = ac::people_p(&app.session, &req).map_err(|e| e.to_string())?;
     let range = ac::range_p(&app.session, &req).map_err(|e| e.to_string())?;
-    let jobs = ac::level_jobs(&app.session, &people, range).map_err(|e| e.to_string())?;
-    if jobs.is_empty() {
+    if ac::level_jobs(&app.session, &people, range).map_err(|e| e.to_string())?.is_empty() {
         return Err(tl!("The microphone tracks have no clips").into());
     }
+    let extra = ac::extra_p(&app.session, &req, &people).map_err(|e| e.to_string())?;
+    let (jobs, rows) = ac::all_level_jobs(&app.session, &people, &extra, range).map_err(|e| e.to_string())?;
     let tuning = ac::tuning_p(&req);
+    let keep = ac::keep_ranges(&app.session, range, &tuning);
     let n = people.len();
     let job = Arc::new(Mutex::new(Job { label: tl!("Listening to the microphones…").into(), ..Job::default() }));
     let j = job.clone();
     let spawned = std::thread::Builder::new().name("auto-cut".into()).spawn(move || {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let lv = ac::levels(&jobs, n, range, &mut |done, total| {
+            let lv = ac::levels(&jobs, rows, range, &mut |done, total| {
                 let mut g = lock(&j);
                 g.progress = done as f32 / total.max(1) as f32;
                 !g.cancel.load(Ordering::Relaxed)
             })
             .map_err(|e| e.to_string())?;
-            let (shots, reactions) = ac::plan(&lv, &tuning);
-            let cuts = ac::silences(&lv, &tuning, &reactions);
-            Ok((shots, reactions, cuts, ac::talk_share(&lv)))
+            let heard = ac::Heard::split(&lv, n, &extra);
+            let (shots, reactions) = ac::plan(heard.people, &tuning);
+            let cuts = ac::silences(&heard, &tuning, &reactions, &keep);
+            Ok((shots, reactions, cuts, ac::talk_share(heard.people)))
         }))
         .unwrap_or_else(|_| Err("the auto cut worker stopped unexpectedly".into()));
         lock(&j).done = Some(r);
@@ -244,6 +256,18 @@ fn finish(app: &mut FilmcraftApp, result: Result<Planned, String>, req: Option<V
     app.ui.status = status;
 }
 
+/// The game sound track, or "Auto" (empty): the view clip's linked sound.
+fn sound_combo(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, value: &mut String, names: &[String]) {
+    let shown = if value.is_empty() { tl!("Auto").to_string() } else { value.clone() };
+    let r = craft_ui::ComboBox::from_id_salt(id.to_string()).width(64.0).selected_text(shown).show_ui(ui, |ui| {
+        ui.selectable_value(value, String::new(), tl!("Auto"));
+        for n in names {
+            ui.selectable_value(value, n.clone(), n);
+        }
+    });
+    app.auto.add_response(id, &r.response, id);
+}
+
 fn track_combo(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, value: &mut String, names: &[String]) {
     let shown = if value.is_empty() { "—".to_string() } else { value.clone() };
     let r = craft_ui::ComboBox::from_id_salt(id.to_string()).width(56.0).selected_text(shown).show_ui(ui, |ui| {
@@ -285,11 +309,12 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             let r = ui.button(tl!("Fill In"));
             app.auto.add_response("autoCut.fill", &r, tl!("Fill In"));
             if r.clicked() {
-                let rows = fill_in(app);
+                let (rows, voices) = fill_in(app);
                 if rows.is_empty() {
                     app.ui.status = tl!("Name the people in the Speaker Captions panel first (who speaks on each audio track)").into();
                 } else {
                     st.settings.people = rows;
+                    st.settings.voices = voices;
                 }
             }
             let r = ui.add_enabled(st.settings.people.len() < MAX_PEOPLE, egui::Button::new(tl!("Add Person")));
@@ -299,10 +324,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
         });
         let mut remove = None;
-        egui::Grid::new("auto-cut-people").num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
+        egui::Grid::new("auto-cut-people").num_columns(5).spacing([6.0, 4.0]).show(ui, |ui| {
             ui.label(RichText::new(tl!("Name")).small().color(t.text_dim));
             ui.label(RichText::new(tl!("View")).small().color(t.text_dim));
             ui.label(RichText::new(tl!("Mic")).small().color(t.text_dim));
+            ui.label(RichText::new(tl!("Game sound")).small().color(t.text_dim));
             ui.label("");
             ui.end_row();
             for (i, row) in st.settings.people.iter_mut().enumerate() {
@@ -310,6 +336,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 app.auto.add_response(&format!("autoCut.name.{i}"), &r, tl!("Name"));
                 track_combo(app, ui, &format!("autoCut.video.{i}"), &mut row.video, &videos);
                 track_combo(app, ui, &format!("autoCut.audio.{i}"), &mut row.audio, &audios);
+                sound_combo(app, ui, &format!("autoCut.sound.{i}"), &mut row.sound, &audios);
                 let r = ui.small_button("✕");
                 app.auto.add_response(&format!("autoCut.remove.{i}"), &r, "✕");
                 if r.clicked() {
@@ -323,6 +350,25 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         {
             st.settings.people.remove(i);
         }
+        // other voices: Discord recordings and anyone without a view; they play whole and their
+        // talk is never cut
+        ui.add_space(4.0);
+        ui.label(RichText::new(tl!("Other voice tracks (Discord…): kept whole, their talk is never cut")).small().color(t.text_dim));
+        ui.horizontal_wrapped(|ui| {
+            let mics: Vec<String> = st.settings.people.iter().map(|r| r.audio.clone()).collect();
+            for a in audios.iter().filter(|a| !mics.contains(a)) {
+                let mut on = st.settings.voices.contains(a);
+                let r = ui.checkbox(&mut on, a.as_str());
+                app.auto.add_response(&format!("autoCut.voice.{a}"), &r, a);
+                if r.changed() {
+                    if on {
+                        st.settings.voices.push(a.clone());
+                    } else {
+                        st.settings.voices.retain(|v| v != a);
+                    }
+                }
+            }
+        });
         ui.add_space(6.0);
         let num = |app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, label: &str, v: &mut f64| {
             ui.horizontal(|ui| {
