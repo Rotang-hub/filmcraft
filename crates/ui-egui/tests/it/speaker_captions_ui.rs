@@ -81,6 +81,9 @@ fn naming_a_track_and_making_captions_places_head_captions() {
     d.ok("ui.type", json!({"text": dir.path().to_string_lossy()}));
     d.ok("ui.click", json!({"id": "speakerCaptions.name.A1"}));
     d.ok("ui.type", json!({"text": "Ann"}));
+    // a note on another track (a call recording): no preset, so no captions from it
+    d.ok("ui.click", json!({"id": "speakerCaptions.name.A2"}));
+    d.ok("ui.type", json!({"text": "Ann의 디스코드"}));
     d.frames(2);
     if let Some(dir) = &snapshots {
         d.frames(2);

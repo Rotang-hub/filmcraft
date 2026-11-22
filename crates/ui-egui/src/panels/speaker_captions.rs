@@ -1,6 +1,7 @@
 //! Fork: the Speaker Captions panel (Window ▸ Speaker Captions).
 //!
-//! Each audio track holding one person's voice gets that person's name; the panel finds their
+//! Each audio track holding one person's voice gets that person's name (a name with no preset,
+//! such as "라스의 디스코드", is only a note: that track gets no captions); the panel finds their
 //! head-caption template (`<name>_머리자막.fcgt` in the template folder), and **Make Captions**
 //! transcribes every named track on a worker thread, then places the captions in one undo step
 //! (`captions.placeSpeakerPhrases`; see `filmcraft_engine::speaker_captions`). The speech model
@@ -277,7 +278,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 } else {
                     match sc::template_for(&app.session, name.trim(), None, Some(&st.settings.template_dir)) {
                         Ok(_) => ui.label(RichText::new(tl!("✓ preset")).color(t.accent)),
-                        Err(_) => ui.label(RichText::new(tl!("no preset")).color(egui::Color32::from_rgb(230, 110, 90))),
+                        // a name without a preset is a note (a call track, game sound…): no captions are made
+                        Err(_) => ui.label(RichText::new(tl!("note: no captions")).color(t.text_dim)).on_hover_text(tl!(
+                            "No head-caption preset has this name, so this track gets no captions. Use it to note what the track is (a call, game sound…)."
+                        )),
                     };
                 }
                 ui.end_row();

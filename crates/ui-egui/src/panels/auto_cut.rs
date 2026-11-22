@@ -4,7 +4,8 @@
 //! **Make Auto Cut** measures the microphones on a worker thread, plans the cuts (whoever talks;
 //! big moments shown from the view of whoever reacted first, with a build-up before) and builds
 //! them on the "Auto Cut" track (`edit.autoCutPlace`; see `filmcraft_engine::auto_cut`).
-//! **Fill In** guesses the rows: names from the Speaker Captions panel, and each person's view as
+//! **Fill In** guesses the rows: the people named in the Speaker Captions panel (names with a
+//! head-caption preset; notes like "라스의 디스코드" are skipped), and each person's view as
 //! the video track whose clips carry their name.
 //!
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
@@ -124,9 +125,12 @@ fn state(app: &FilmcraftApp, ctx: &egui::Context) -> State {
 fn fill_in(app: &FilmcraftApp) -> Vec<Row> {
     let Some(q) = app.session.active_sequence() else { return Vec::new() };
     let sc_path = app.session.prefs_path.as_ref().and_then(|p| p.parent()).map(|d| d.join(super::speaker_captions::FILE));
-    let names = super::speaker_captions::Settings::load(sc_path.as_deref()).names;
-    let mut rows: Vec<Row> = names
+    let sc = super::speaker_captions::Settings::load(sc_path.as_deref());
+    // only people (a name with a head-caption preset); notes such as "라스의 디스코드" are skipped
+    let mut rows: Vec<Row> = sc
+        .names
         .iter()
+        .filter(|(_, name)| filmcraft_engine::speaker_captions::template_for(&app.session, name.trim(), None, Some(&sc.template_dir)).is_ok())
         .map(|(audio, name)| {
             // the video track whose clips carry the person's name (most clips wins)
             let video = q
