@@ -167,7 +167,7 @@ fn learning_from_an_edit_saves_a_style_that_the_cut_then_uses() {
     assert!(saved["style"]["weights"].is_array(), "the style is saved: {saved}");
     assert_eq!(saved["useStyle"], json!(true));
     let els = d.ok("ui.elements", json!({})).to_string();
-    assert!(els.contains("autoCut.useStyle"));
+    assert!(els.contains("autoCut.useStyle") && els.contains("autoCut.makeUncut"));
     // and the cut uses it
     for _ in 0..10 {
         d.ok("ui.scroll", json!({"id": "autoCut.learn", "dx": 0.0, "dy": -400.0}));

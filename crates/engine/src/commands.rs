@@ -4242,6 +4242,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::effect_order::commands());
     // Fork: automatic cuts to whoever is talking
     v.extend(crate::auto_cut::commands());
+    v.extend(crate::auto_cut_uncut::commands());
     // Edit ▸ Label ▸ <colour>, Paste Attributes, subclips, Video / Audio Options, Replace With Clip…
     // and their menu order
     crate::clip_ops::apply_layout(&mut v);

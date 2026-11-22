@@ -67,6 +67,7 @@ pub mod effect_order;
 pub mod auto_cut;
 pub mod auto_cut_motion;
 pub mod auto_cut_style;
+pub mod auto_cut_uncut;
 pub mod sync;
 pub mod transcript;
 pub mod trim;

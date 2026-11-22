@@ -3824,3 +3824,7 @@
 	Forget	지우기
 	Learning another edit adds to this style.	다른 편집본을 또 배우면 이 스타일에 더해집니다.
 	No sequence	시퀀스가 없습니다
+	Make the uncut sequence of this edit	이 편집본의 원본 시퀀스 만들기
+	Made "{name}" with {n} recordings: set up the people for it, then Learn	"{name}" 시퀀스를 만들었습니다 (녹화 {n}개). 사람 설정을 확인한 뒤 배우기를 누르세요
+	not in sync, left out: {list}	싱크를 못 찾아 뺀 파일: {list}
+	If no sequence has the whole recordings, this puts each one on whole, lined up from a sequence where they play in sync.	전체 녹화가 들어 있는 시퀀스가 없으면, 싱크가 맞춰진 다른 시퀀스를 참고해 녹화 파일을 통째로 나란히 놓은 시퀀스를 만듭니다.

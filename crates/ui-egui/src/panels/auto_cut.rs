@@ -11,7 +11,7 @@
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
 //! `autoCut.fill`, `autoCut.add`, `autoCut.name.<n>`, `autoCut.video.<n>`, `autoCut.audio.<n>`,
 //! `autoCut.remove.<n>`, `autoCut.minShot`, `autoCut.reactions`, `autoCut.buildup`, `autoCut.hold`,
-//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.motion`, `autoCut.keep`, `autoCut.learnFrom`, `autoCut.learn`, `autoCut.useStyle`, `autoCut.forgetStyle`, `autoCut.make`, `autoCut.cancel`.
+//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.motion`, `autoCut.keep`, `autoCut.learnFrom`, `autoCut.learn`, `autoCut.makeUncut`, `autoCut.useStyle`, `autoCut.forgetStyle`, `autoCut.make`, `autoCut.cancel`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
@@ -394,6 +394,45 @@ fn track_combo(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, value: &mut 
     app.auto.add_response(id, &r.response, id);
 }
 
+/// The Make button (or the running job's progress), kept at the top so it is always in view.
+fn actions(app: &mut FilmcraftApp, ui: &mut egui::Ui, st: &mut State) {
+    let t = app.tokens;
+    match st.job.clone() {
+        Some(job) => {
+            let (label, p) = {
+                let g = lock(&job);
+                (g.label.clone(), g.progress)
+            };
+            ui.add(egui::ProgressBar::new(p).text(label).show_percentage());
+            let r = ui.button(tl!("Cancel"));
+            app.auto.add_response("autoCut.cancel", &r, tl!("Cancel"));
+            if r.clicked() {
+                lock(&job).cancel.store(true, Ordering::Relaxed);
+            }
+        }
+        None => {
+            let ready = st.settings.people.iter().filter(|r| !r.video.is_empty() && !r.audio.is_empty()).count() >= 2;
+            let r = ui.add_enabled(ready, egui::Button::new(RichText::new(tl!("Make Auto Cut")).strong()).min_size(vec2(140.0, 26.0)));
+            app.auto.add_response("autoCut.make", &r, tl!("Make Auto Cut"));
+            if r.clicked() {
+                let style = if st.settings.use_style { st.settings.style.as_ref().and_then(|v| Style::from_value(v).ok()) } else { None };
+                match start(app, &st.settings, Mode::Cut(style)) {
+                    Ok((job, req)) => {
+                        st.job = Some(job);
+                        st.request = Some(req);
+                    }
+                    Err(e) => app.ui.status = e,
+                }
+            }
+            ui.label(
+                RichText::new(tl!("The cut goes on its own \"Auto Cut\" track; your tracks are not changed. Running it again replaces it."))
+                    .small()
+                    .color(t.text_dim),
+            );
+        }
+    }
+}
+
 pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let t = app.tokens;
     let mut st = state(app, ui.ctx());
@@ -422,6 +461,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 6.0))));
     let ui = &mut child;
+    actions(app, ui, &mut st);
+    ui.separator();
     egui::ScrollArea::vertical().id_salt("auto-cut-scroll").auto_shrink([false, false]).show(ui, |ui| {
         let Some((videos, audios)) = app
             .session
@@ -569,6 +610,31 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             }
         });
+        // no uncut sequence of the edit yet: make one from a sequence that has the recordings in sync
+        let r = ui.add_enabled(st.job.is_none() && !st.settings.learn_from.is_empty(), egui::Button::new(tl!("Make the uncut sequence of this edit")));
+        app.auto.add_response("autoCut.makeUncut", &r, tl!("Make the uncut sequence of this edit"));
+        if r.clicked() {
+            match app.session.execute("sequence.makeUncut", json!({"from": st.settings.learn_from})) {
+                Ok(v) => {
+                    let mut m = tlf!(
+                        "Made \"{name}\" with {n} recordings: set up the people for it, then Learn",
+                        name = v["name"].as_str().unwrap_or(""),
+                        n = v["recordings"].as_u64().unwrap_or(0)
+                    );
+                    if let Some(miss) = v["missing"].as_array().filter(|a| !a.is_empty()) {
+                        let list = miss.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ");
+                        m.push_str(&format!(" · {}", tlf!("not in sync, left out: {list}", list = list)));
+                    }
+                    app.ui.status = m;
+                }
+                Err(e) => app.ui.status = e.to_string(),
+            }
+        }
+        ui.label(
+            RichText::new(tl!("If no sequence has the whole recordings, this puts each one on whole, lined up from a sequence where they play in sync."))
+                .small()
+                .color(t.text_dim),
+        );
         if let Some(v) = st.settings.style.clone() {
             ui.label(RichText::new(style_text(&v)).small());
             ui.horizontal(|ui| {
@@ -581,41 +647,6 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 }
             });
             ui.label(RichText::new(tl!("Learning another edit adds to this style.")).small().color(t.text_dim));
-        }
-        ui.add_space(6.0);
-        match st.job.clone() {
-            Some(job) => {
-                let (label, p) = {
-                    let g = lock(&job);
-                    (g.label.clone(), g.progress)
-                };
-                ui.add(egui::ProgressBar::new(p).text(label).show_percentage());
-                let r = ui.button(tl!("Cancel"));
-                app.auto.add_response("autoCut.cancel", &r, tl!("Cancel"));
-                if r.clicked() {
-                    lock(&job).cancel.store(true, Ordering::Relaxed);
-                }
-            }
-            None => {
-                let ready = st.settings.people.iter().filter(|r| !r.video.is_empty() && !r.audio.is_empty()).count() >= 2;
-                let r = ui.add_enabled(ready, egui::Button::new(RichText::new(tl!("Make Auto Cut")).strong()).min_size(vec2(140.0, 26.0)));
-                app.auto.add_response("autoCut.make", &r, tl!("Make Auto Cut"));
-                if r.clicked() {
-                    let style = if st.settings.use_style { st.settings.style.as_ref().and_then(|v| Style::from_value(v).ok()) } else { None };
-                    match start(app, &st.settings, Mode::Cut(style)) {
-                        Ok((job, req)) => {
-                            st.job = Some(job);
-                            st.request = Some(req);
-                        }
-                        Err(e) => app.ui.status = e,
-                    }
-                }
-                ui.label(
-                    RichText::new(tl!("The cut goes on its own \"Auto Cut\" track; your tracks are not changed. Running it again replaces it."))
-                        .small()
-                        .color(t.text_dim),
-                );
-            }
         }
     });
     if st.settings != before
