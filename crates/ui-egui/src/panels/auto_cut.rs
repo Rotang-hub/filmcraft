@@ -11,7 +11,7 @@
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
 //! `autoCut.fill`, `autoCut.add`, `autoCut.name.<n>`, `autoCut.video.<n>`, `autoCut.audio.<n>`,
 //! `autoCut.remove.<n>`, `autoCut.minShot`, `autoCut.reactions`, `autoCut.buildup`, `autoCut.hold`,
-//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.motion`, `autoCut.keep`, `autoCut.make`, `autoCut.cancel`.
+//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.motion`, `autoCut.keep`, `autoCut.learnFrom`, `autoCut.learn`, `autoCut.useStyle`, `autoCut.forgetStyle`, `autoCut.make`, `autoCut.cancel`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use egui::{Rect, RichText, vec2};
 use filmcraft_engine::auto_cut::{self as ac, Reaction, Shot};
 use filmcraft_engine::auto_cut_motion as motion;
+use filmcraft_engine::auto_cut_style::{Labels, Style, labels, learn as learn_style, sequence_by, styled_cuts};
 use filmcraft_engine::track_views::{audio_name, video_name};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -62,6 +63,12 @@ pub struct Settings {
     pub keep_percent: f64,
     /// Look at how busy each view is, too (slower).
     pub motion: bool,
+    /// The edited sequence to learn from (its name).
+    pub learn_from: String,
+    /// The learned style (`auto_cut_style::Style` as JSON).
+    pub style: Option<Value>,
+    /// Cut in the learned style.
+    pub use_style: bool,
 }
 
 impl Default for Settings {
@@ -81,6 +88,9 @@ impl Default for Settings {
             pad: t.pad,
             keep_percent: t.keep * 100.0,
             motion: true,
+            learn_from: String::new(),
+            style: None,
+            use_style: true,
         }
     }
 }
@@ -132,7 +142,7 @@ struct Job {
     label: String,
     progress: f32,
     cancel: AtomicBool,
-    done: Option<Result<Planned, String>>,
+    done: Option<Result<Outcome, String>>,
 }
 
 #[derive(Clone, Default)]
@@ -193,7 +203,15 @@ fn fill_in(app: &FilmcraftApp) -> (Vec<Row>, Vec<String>) {
     (rows, voices)
 }
 
-fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Value), String> {
+/// What a job is for.
+enum Mode {
+    /// Make the cut (in the learned style when given).
+    Cut(Option<Style>),
+    /// Learn from an edit of the active sequence.
+    Learn(Labels, Option<Style>),
+}
+
+fn start(app: &mut FilmcraftApp, st: &Settings, mode: Mode) -> Result<(Arc<Mutex<Job>>, Value), String> {
     let req = st.request();
     let people = ac::people_p(&app.session, &req).map_err(|e| e.to_string())?;
     let range = ac::range_p(&app.session, &req).map_err(|e| e.to_string())?;
@@ -202,14 +220,19 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
     }
     let extra = ac::extra_p(&app.session, &req, &people).map_err(|e| e.to_string())?;
     let (jobs, rows) = ac::all_level_jobs(&app.session, &people, &extra, range).map_err(|e| e.to_string())?;
-    let tuning = ac::tuning_p(&req);
+    let style_now = match &mode {
+        Mode::Cut(s) => s.as_ref(),
+        Mode::Learn(..) => None,
+    };
+    let tuning = ac::styled_tuning(ac::tuning_p(&req), style_now);
     let keep = ac::keep_ranges(&app.session, range, &tuning);
     let n = people.len();
-    let views = if st.motion && tuning.trim { motion::motion_jobs(&app.session, &people, range).map_err(|e| e.to_string())? } else { Vec::new() };
+    let look = st.motion && (tuning.trim || matches!(mode, Mode::Learn(..)));
+    let views = if look { motion::motion_jobs(&app.session, &people, range).map_err(|e| e.to_string())? } else { Vec::new() };
     let job = Arc::new(Mutex::new(Job { label: tl!("Listening to the microphones…").into(), ..Job::default() }));
     let j = job.clone();
     let spawned = std::thread::Builder::new().name("auto-cut".into()).spawn(move || {
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Outcome, String> {
             let lv = ac::levels(&jobs, rows, range, &mut |done, total| {
                 let mut g = lock(&j);
                 g.progress = done as f32 / total.max(1) as f32;
@@ -218,23 +241,34 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
             .map_err(|e| e.to_string())?;
             let mut heard = ac::Heard::split(&lv, n, &extra);
             let (shots, reactions) = ac::plan(heard.people, &tuning);
-            let on_screen = if views.is_empty() {
+            let m = if views.is_empty() {
                 Vec::new()
             } else {
                 lock(&j).label = tl!("Watching the views…").into();
-                let m = motion::motion(&views, n, range, &mut |done, total| {
+                motion::motion(&views, n, range, &mut |done, total| {
                     let mut g = lock(&j);
                     g.progress = done as f32 / total.max(1) as f32;
                     !g.cancel.load(Ordering::Relaxed)
                 })
-                .map_err(|e| e.to_string())?;
-                motion::shown(&m, &shots, ac::frame_count(range))
+                .map_err(|e| e.to_string())?
             };
-            heard.motion = &on_screen;
-            let silences = ac::silences(&heard, &tuning, &reactions, &keep);
-            let dull = ac::dull_parts(&heard, &tuning, &reactions, &keep, &silences);
-            let cuts = Cuts { silences, dull };
-            Ok((shots, reactions, cuts, ac::talk_share(heard.people)))
+            match mode {
+                Mode::Learn(labels, prior) => {
+                    let style = learn_style(&heard, &m, &reactions, &labels, prior).map_err(|e| e.to_string())?;
+                    Ok(Outcome::Learned(Box::new(style)))
+                }
+                Mode::Cut(style) => {
+                    let on_screen = if m.is_empty() { Vec::new() } else { motion::shown(&m, &shots, ac::frame_count(range)) };
+                    heard.motion = &on_screen;
+                    let silences = ac::silences(&heard, &tuning, &reactions, &keep);
+                    let dull = match &style {
+                        Some(st) => styled_cuts(&heard, &m, &tuning, st, &reactions, &keep, &silences),
+                        None => ac::dull_parts(&heard, &tuning, &reactions, &keep, &silences),
+                    };
+                    let cuts = Cuts { silences, dull };
+                    Ok(Outcome::Cut((shots, reactions, cuts, ac::talk_share(heard.people))))
+                }
+            }
         }))
         .unwrap_or_else(|_| Err("the auto cut worker stopped unexpectedly".into()));
         lock(&j).done = Some(r);
@@ -243,6 +277,46 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
         return Err(e.to_string());
     }
     Ok((job, req))
+}
+
+/// Starts learning from `st.learn_from`, an edit of the active sequence.
+fn start_learning(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Value), String> {
+    let req = st.request();
+    let people = ac::people_p(&app.session, &req).map_err(|e| e.to_string())?;
+    let range = ac::range_p(&app.session, &req).map_err(|e| e.to_string())?;
+    let raw_id = app.session.state.active_sequence.ok_or_else(|| tl!("No sequence").to_string())?;
+    let edit_id = sequence_by(&app.session.project, Some(&json!(st.learn_from))).map_err(|e| e.to_string())?;
+    if edit_id == raw_id {
+        return Err(tl!("Pick the edited sequence, not the one that is open").into());
+    }
+    let (Some(raw), Some(edit)) = (app.session.project.sequence(raw_id), app.session.project.sequence(edit_id)) else {
+        return Err(tl!("No sequence").into());
+    };
+    let labels = labels(raw, edit, &people, range);
+    if !labels.kept.iter().any(|k| *k) {
+        return Err(tl!("That edit uses none of this sequence's clips: open the uncut sequence it was cut from").into());
+    }
+    let prior = st.style.as_ref().and_then(|v| Style::from_value(v).ok());
+    start(app, st, Mode::Learn(labels, prior))
+}
+
+/// What a finished job brings back.
+enum Outcome {
+    Cut(Planned),
+    Learned(Box<Style>),
+}
+
+/// What was learned, in words.
+fn style_text(v: &Value) -> String {
+    let Ok(style) = Style::from_value(v) else { return String::new() };
+    tlf!(
+        "Learned from {n} edit(s): keeps {keep}% · shots about {shot} s · matches your edit {agree}% (without learning {before}%)",
+        n = style.examples,
+        keep = format!("{:.0}", style.keep() * 100.0),
+        shot = format!("{:.1}", style.shot),
+        agree = format!("{:.0}", style.agreement * 100.0),
+        before = format!("{:.0}", style.before * 100.0)
+    )
 }
 
 fn finish(app: &mut FilmcraftApp, result: Result<Planned, String>, req: Option<Value>) {
@@ -330,7 +404,18 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             Some(r) => {
                 st.job = None;
                 let req = st.request.take();
-                finish(app, r, req);
+                match r {
+                    Ok(Outcome::Cut(p)) => finish(app, Ok(p), req),
+                    Ok(Outcome::Learned(style)) => match serde_json::to_value(&*style) {
+                        Ok(v) => {
+                            app.ui.status = style_text(&v);
+                            st.settings.style = Some(v);
+                            st.settings.use_style = true;
+                        }
+                        Err(e) => app.ui.status = e.to_string(),
+                    },
+                    Err(e) => finish(app, Err(e), req),
+                }
             }
             None => ui.ctx().request_repaint_after(std::time::Duration::from_millis(200)),
         }
@@ -451,6 +536,53 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
         ui.label(RichText::new(tl!("With In and Out marked, only that part is cut.")).small().color(t.text_dim));
         ui.add_space(6.0);
+        ui.separator();
+        ui.label(RichText::new(tl!("My editing style")).strong());
+        ui.label(
+            RichText::new(tl!("Open the uncut sequence, pick the edit you made from it, and Auto Cut learns what you keep and cut.")).small().color(t.text_dim),
+        );
+        let others: Vec<String> = {
+            let active = app.session.state.active_sequence;
+            let mut v: Vec<String> = app.session.project.sequences().filter(|i| Some(i.id) != active).map(|i| i.name.clone()).collect();
+            v.sort();
+            v
+        };
+        ui.horizontal(|ui| {
+            ui.label(tl!("Edited sequence"));
+            let shown = if st.settings.learn_from.is_empty() { tl!("Choose…").to_string() } else { st.settings.learn_from.clone() };
+            let r = craft_ui::ComboBox::from_id_salt("autoCut.learnFrom").width(160.0).selected_text(shown).show_ui(ui, |ui| {
+                for n in &others {
+                    ui.selectable_value(&mut st.settings.learn_from, n.clone(), n);
+                }
+            });
+            app.auto.add_response("autoCut.learnFrom", &r.response, tl!("Edited sequence"));
+            let ready = st.job.is_none() && !st.settings.learn_from.is_empty() && st.settings.people.len() >= 2;
+            let r = ui.add_enabled(ready, egui::Button::new(tl!("Learn")));
+            app.auto.add_response("autoCut.learn", &r, tl!("Learn"));
+            if r.clicked() {
+                match start_learning(app, &st.settings) {
+                    Ok((job, req)) => {
+                        st.job = Some(job);
+                        st.request = Some(req);
+                    }
+                    Err(e) => app.ui.status = e,
+                }
+            }
+        });
+        if let Some(v) = st.settings.style.clone() {
+            ui.label(RichText::new(style_text(&v)).small());
+            ui.horizontal(|ui| {
+                let r = ui.checkbox(&mut st.settings.use_style, tl!("Cut in my style"));
+                app.auto.add_response("autoCut.useStyle", &r, tl!("Cut in my style"));
+                let r = ui.button(tl!("Forget"));
+                app.auto.add_response("autoCut.forgetStyle", &r, tl!("Forget"));
+                if r.clicked() {
+                    st.settings.style = None;
+                }
+            });
+            ui.label(RichText::new(tl!("Learning another edit adds to this style.")).small().color(t.text_dim));
+        }
+        ui.add_space(6.0);
         match st.job.clone() {
             Some(job) => {
                 let (label, p) = {
@@ -469,7 +601,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
                 let r = ui.add_enabled(ready, egui::Button::new(RichText::new(tl!("Make Auto Cut")).strong()).min_size(vec2(140.0, 26.0)));
                 app.auto.add_response("autoCut.make", &r, tl!("Make Auto Cut"));
                 if r.clicked() {
-                    match start(app, &st.settings) {
+                    let style = if st.settings.use_style { st.settings.style.as_ref().and_then(|v| Style::from_value(v).ok()) } else { None };
+                    match start(app, &st.settings, Mode::Cut(style)) {
                         Ok((job, req)) => {
                             st.job = Some(job);
                             st.request = Some(req);

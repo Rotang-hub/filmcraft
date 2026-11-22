@@ -3812,3 +3812,15 @@
 	Below 100%, the dullest talk goes too, cut between sentences. Lively talk, big moments and marked parts stay.	100% 미만이면 가장 지루한 구간도 문장 사이에서 잘라냅니다. 활발한 대화, 큰 리액션, 마커 찍은 부분은 남깁니다.
 	Watching the views…	화면을 보는 중…
 	Also look at the picture (a still screen goes first, action stays; takes longer)	화면도 보기 (멈춘 화면은 먼저 자르고 액션은 남김, 분석이 더 오래 걸림)
+	Learned from {n} edit(s): keeps {keep}% · shots about {shot} s · matches your edit {agree}% (without learning {before}%)	편집 {n}개에서 배움: 남기는 분량 {keep}% · 컷 길이 약 {shot}초 · 내 편집과 일치율 {agree}% (학습 전 {before}%)
+	Pick the edited sequence, not the one that is open	지금 열린 시퀀스가 아닌 편집한 결과 시퀀스를 고르세요
+	That edit uses none of this sequence's clips: open the uncut sequence it was cut from	그 편집본은 이 시퀀스의 클립을 쓰지 않습니다. 컷 전 원본 시퀀스를 열고 다시 해 주세요
+	My editing style	내 편집 스타일
+	Open the uncut sequence, pick the edit you made from it, and Auto Cut learns what you keep and cut.	컷 전 원본 시퀀스를 열고, 그걸로 편집한 결과 시퀀스를 고르면 무엇을 남기고 자르는지 배웁니다.
+	Edited sequence	편집한 결과
+	Choose…	선택…
+	Learn	배우기
+	Cut in my style	배운 스타일로 자르기
+	Forget	지우기
+	Learning another edit adds to this style.	다른 편집본을 또 배우면 이 스타일에 더해집니다.
+	No sequence	시퀀스가 없습니다

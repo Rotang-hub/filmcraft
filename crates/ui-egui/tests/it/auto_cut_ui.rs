@@ -102,3 +102,87 @@ fn make_auto_cut_builds_the_cut_track_from_the_views() {
     assert!(made, "the cut was built; status: {}", d.harness.state().ui.status);
     assert!(d.harness.state().ui.status.contains("Auto Cut"), "{}", d.harness.state().ui.status);
 }
+
+#[test]
+fn learning_from_an_edit_saves_a_style_that_the_cut_then_uses() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::default();
+    s.execute("file.openDemoProject", json!({})).unwrap();
+    s.edit_sequence("test", |q, ctx, _| {
+        let mut copy = q.video_tracks[0].items.clone();
+        for it in &mut copy {
+            it.id = ClipId(ctx.alloc());
+            it.link = None;
+        }
+        q.video_tracks[1].items = copy;
+        Ok(())
+    })
+    .unwrap();
+    let raw = s.state.active_sequence.unwrap();
+    let v1 = s.active_sequence().unwrap().video_tracks[0].items.clone();
+    // the edit: the first 1.5 s of V1's first clip
+    s.execute("file.newSequence", json!({"name": "편집본"})).unwrap();
+    s.edit_sequence("edit", |q, ctx, _| {
+        let mut c = v1[0].clone();
+        c.id = ClipId(ctx.alloc());
+        c.link = None;
+        c.duration = filmcraft_time::Tick::from_seconds_f64(1.5).min(c.duration);
+        q.video_tracks[0].items.push(c);
+        Ok(())
+    })
+    .unwrap();
+    s.state.active_sequence = Some(raw);
+    s.prefs_path = Some(dir.path().join("preferences.json"));
+    let file = dir.path().join("auto_cut.json");
+    std::fs::write(
+        &file,
+        json!({"people": [{"name": "A", "video": "V1", "audio": "A1"}, {"name": "B", "video": "V2", "audio": "A2"}], "learnFrom": "편집본", "motion": false})
+            .to_string(),
+    )
+    .unwrap();
+    let (tx, rx) = channel();
+    let app = FilmcraftApp::new(s).with_control(rx);
+    let harness = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_max_steps(10_000).build_eframe(move |_cc| app);
+    let mut d = Driver { harness, tx };
+    d.frames(4);
+    d.ok("ui.menu.invoke", json!({"id": "window.panel.AutoCut"}));
+    d.frames(3);
+    for _ in 0..10 {
+        d.ok("ui.scroll", json!({"id": "autoCut.minShot", "dx": 0.0, "dy": -400.0}));
+        d.frames(2);
+    }
+    d.ok("ui.click", json!({"id": "autoCut.learn"}));
+    let mut learned = false;
+    for _ in 0..600 {
+        d.frames(1);
+        if d.harness.state().ui.status.contains("Learned from") {
+            learned = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(learned, "status: {}", d.harness.state().ui.status);
+    d.frames(3);
+    let saved: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert!(saved["style"]["weights"].is_array(), "the style is saved: {saved}");
+    assert_eq!(saved["useStyle"], json!(true));
+    let els = d.ok("ui.elements", json!({})).to_string();
+    assert!(els.contains("autoCut.useStyle"));
+    // and the cut uses it
+    for _ in 0..10 {
+        d.ok("ui.scroll", json!({"id": "autoCut.learn", "dx": 0.0, "dy": -400.0}));
+        d.frames(2);
+    }
+    d.ok("ui.click", json!({"id": "autoCut.make"}));
+    let mut made = false;
+    for _ in 0..600 {
+        d.frames(1);
+        let q = d.harness.state().session.active_sequence().unwrap();
+        if q.video_tracks.iter().any(|t| t.name == "Auto Cut" && !t.items.is_empty()) {
+            made = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(made, "status: {}", d.harness.state().ui.status);
+}

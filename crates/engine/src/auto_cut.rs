@@ -283,16 +283,16 @@ fn percentile(v: &mut [f32], p: f64) -> Option<f32> {
 }
 
 /// Per person: talking in each frame, and the level that counts as loud (a reaction).
-struct Voice {
-    talking: Vec<bool>,
+pub(crate) struct Voice {
+    pub(crate) talking: Vec<bool>,
     /// The first frame of the run each talking frame belongs to.
     run_start: Vec<usize>,
-    threshold: f32,
-    loud: f32,
+    pub(crate) threshold: f32,
+    pub(crate) loud: f32,
     scream: f32,
 }
 
-fn voice(levels: &[f32]) -> Voice {
+pub(crate) fn voice(levels: &[f32]) -> Voice {
     let n = levels.len();
     let mut sounding: Vec<f32> = levels.iter().copied().filter(|l| *l > -100.0).collect();
     let floor = percentile(&mut sounding, 0.10).unwrap_or(SILENT);
@@ -323,7 +323,7 @@ fn voice(levels: &[f32]) -> Voice {
     Voice { talking, run_start, threshold, loud, scream }
 }
 
-fn runs(v: &[bool]) -> Vec<(usize, usize)> {
+pub(crate) fn runs(v: &[bool]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < v.len() {
@@ -515,7 +515,7 @@ pub fn plan(levels: &[Vec<f32>], tuning: &Tuning) -> (Vec<Shot>, Vec<Reaction>) 
 }
 
 /// Loud moments in a row: runs of at least 3 frames `jump` dB above its usual sounding level.
-fn loud_moments(levels: &[f32], jump: f32) -> Vec<(usize, usize)> {
+pub(crate) fn loud_moments(levels: &[f32], jump: f32) -> Vec<(usize, usize)> {
     let mut sounding: Vec<f32> = levels.iter().copied().filter(|l| *l > -100.0).collect();
     let Some(usual) = percentile(&mut sounding, 0.5) else { return Vec::new() };
     let mut loud: Vec<bool> = levels.iter().map(|l| *l > usual + jump).collect();
@@ -570,7 +570,7 @@ pub fn silences(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[
 
 /// What is never cut: big moments, loud moments on a voice track or in the game sound (each with
 /// its build-up and hold), and the `keep` ranges.
-fn protected(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[(usize, usize)]) -> Vec<(usize, usize)> {
+pub(crate) fn protected(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[(usize, usize)]) -> Vec<(usize, usize)> {
     let buildup = (tuning.buildup.max(0.0) / FRAME) as usize;
     let hold = (tuning.hold.max(0.0) / FRAME) as usize;
     let around = |(a, b): (usize, usize)| (a.saturating_sub(buildup), b.saturating_add(hold));
@@ -597,41 +597,12 @@ fn protected(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[(us
 /// with laughing and shouting counting extra. The lowest-scoring pieces go first; a piece that
 /// touches a protected moment or scores above the middle never goes. Frames `[start, end)`.
 pub fn dull_parts(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[(usize, usize)], silences: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    if !tuning.trim || tuning.keep >= 0.999 || heard.people.is_empty() {
+    if !tuning.trim || tuning.keep >= 0.999 {
         return Vec::new();
     }
-    let n = heard.people.iter().chain(heard.voices).map(Vec::len).max().unwrap_or(0);
-    if n == 0 {
-        return Vec::new();
-    }
-    let rows: Vec<&Vec<f32>> = heard.people.iter().chain(heard.voices).collect();
-    let talkers: Vec<Voice> = rows.iter().map(|l| voice(l)).collect();
-    // liveliness per frame, and where nobody makes a sound at all (a safe place to cut)
-    let mut live = vec![0.0f64; n];
-    let mut gap = vec![true; n];
-    // how much sound there is in each frame (rows sounding, then how far above): where to cut when
-    // there is no gap
-    let mut sound = vec![0.0f64; n];
-    for (l, v) in rows.iter().zip(&talkers) {
-        for f in 0..n {
-            let x = l.get(f).copied().unwrap_or(SILENT);
-            if x > v.threshold {
-                if let Some(g) = gap.get_mut(f) {
-                    *g = false;
-                }
-                if let Some(s) = sound.get_mut(f) {
-                    *s += 100.0 + (x - v.threshold) as f64;
-                }
-            }
-            if v.talking.get(f).copied().unwrap_or(false)
-                && let Some(s) = live.get_mut(f)
-            {
-                let above = ((x - v.threshold) / 10.0).clamp(0.0, 1.5) as f64;
-                let loud = if x > v.loud { 1.0 } else { 0.0 };
-                *s += 1.0 + above + loud;
-            }
-        }
-    }
+    let Some(an) = analyse(heard) else { return Vec::new() };
+    let n = an.n;
+    let mut live = an.live.clone();
     // the picture: a busy view counts like someone talking, a still one (menu, loading) adds nothing
     for (f, m) in heard.motion.iter().enumerate() {
         if *m >= 0.0
@@ -640,37 +611,11 @@ pub fn dull_parts(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: 
             *s += 1.5 * (*m as f64).min(2.0);
         }
     }
-    let removed: Vec<bool> = {
-        let mut r = vec![false; n];
-        for (a, b) in silences {
-            for x in r.iter_mut().take((*b).min(n)).skip(*a) {
-                *x = true;
-            }
-        }
-        r
-    };
+    let removed = mask(n, silences);
     let windows = protected(heard, tuning, reactions, keep);
-    // pieces, cut at gaps
-    let (lo, hi, aim) = ((3.0 / FRAME) as usize, (10.0 / FRAME) as usize, (5.0 / FRAME) as usize);
-    let mut pieces: Vec<(usize, usize)> = Vec::new();
-    let mut a = 0usize;
-    while a < n {
-        let end = (a + hi).min(n);
-        if n - a <= hi {
-            pieces.push((a, n));
-            break;
-        }
-        // the gap nearest the aim, else the quietest frame
-        let b = (a + lo..end)
-            .filter(|f| gap.get(*f).copied().unwrap_or(false))
-            .min_by_key(|f| f.abs_diff(a + aim))
-            .or_else(|| (a + lo..end).min_by(|x, y| sound.get(*x).unwrap_or(&0.0).total_cmp(sound.get(*y).unwrap_or(&0.0))))
-            .unwrap_or(end);
-        pieces.push((a, b));
-        a = b;
-    }
     // score what is left of each piece once the silences are gone
-    let mut scored: Vec<(f64, usize, usize, usize)> = pieces
+    let mut scored: Vec<(f64, usize, usize, usize)> = an
+        .pieces
         .iter()
         .filter_map(|(a, b)| {
             let left = (*a..*b).filter(|f| !removed.get(*f).copied().unwrap_or(true)).count();
@@ -701,6 +646,85 @@ pub fn dull_parts(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: 
     }
     out.sort_unstable();
     out
+}
+
+/// Frames inside any of `ranges`.
+pub(crate) fn mask(n: usize, ranges: &[(usize, usize)]) -> Vec<bool> {
+    let mut r = vec![false; n];
+    for (a, b) in ranges {
+        for x in r.iter_mut().take((*b).min(n)).skip(*a) {
+            *x = true;
+        }
+    }
+    r
+}
+
+/// The talk of a stretch, split into pieces to keep or cut.
+pub(crate) struct Analysis {
+    pub(crate) n: usize,
+    /// Liveliness of the talk per frame (people and other voices).
+    pub(crate) live: Vec<f64>,
+    /// About 5 s (3–10 s) each, split where nobody makes a sound (else at the quietest frame).
+    pub(crate) pieces: Vec<(usize, usize)>,
+    /// Per row (people, then other voices).
+    pub(crate) talkers: Vec<Voice>,
+}
+
+pub(crate) fn analyse(heard: &Heard) -> Option<Analysis> {
+    if heard.people.is_empty() {
+        return None;
+    }
+    let n = heard.people.iter().chain(heard.voices).map(Vec::len).max().unwrap_or(0);
+    if n == 0 {
+        return None;
+    }
+    let rows: Vec<&Vec<f32>> = heard.people.iter().chain(heard.voices).collect();
+    let talkers: Vec<Voice> = rows.iter().map(|l| voice(l)).collect();
+    // liveliness per frame, and where nobody makes a sound at all (a safe place to cut)
+    let mut live = vec![0.0f64; n];
+    let mut gap = vec![true; n];
+    // how much sound there is in each frame (rows sounding, then how far above): where to cut when
+    // there is no gap
+    let mut sound = vec![0.0f64; n];
+    for (l, v) in rows.iter().zip(&talkers) {
+        for f in 0..n {
+            let x = l.get(f).copied().unwrap_or(SILENT);
+            if x > v.threshold {
+                if let Some(g) = gap.get_mut(f) {
+                    *g = false;
+                }
+                if let Some(s) = sound.get_mut(f) {
+                    *s += 100.0 + (x - v.threshold) as f64;
+                }
+            }
+            if v.talking.get(f).copied().unwrap_or(false)
+                && let Some(s) = live.get_mut(f)
+            {
+                let above = ((x - v.threshold) / 10.0).clamp(0.0, 1.5) as f64;
+                let loud = if x > v.loud { 1.0 } else { 0.0 };
+                *s += 1.0 + above + loud;
+            }
+        }
+    }
+    let (lo, hi, aim) = ((3.0 / FRAME) as usize, (10.0 / FRAME) as usize, (5.0 / FRAME) as usize);
+    let mut pieces: Vec<(usize, usize)> = Vec::new();
+    let mut a = 0usize;
+    while a < n {
+        let end = (a + hi).min(n);
+        if n - a <= hi {
+            pieces.push((a, n));
+            break;
+        }
+        // the gap nearest the aim, else the quietest frame
+        let b = (a + lo..end)
+            .filter(|f| gap.get(*f).copied().unwrap_or(false))
+            .min_by_key(|f| f.abs_diff(a + aim))
+            .or_else(|| (a + lo..end).min_by(|x, y| sound.get(*x).unwrap_or(&0.0).total_cmp(sound.get(*y).unwrap_or(&0.0))))
+            .unwrap_or(end);
+        pieces.push((a, b));
+        a = b;
+    }
+    Some(Analysis { n, live, pieces, talkers })
 }
 
 /// The user's markers in `range` as frames to keep: a marker with a duration keeps its span, a
@@ -1069,30 +1093,77 @@ pub fn tuning_p(p: &Value) -> Tuning {
     }
 }
 
-fn auto_cut(s: &mut Session, p: &Value) -> Result<Value> {
+/// Everything Auto Cut hears and sees of the active sequence, for a cut or for learning.
+struct Measured {
+    people: Vec<Person>,
+    extra: Extra,
+    range: (Tick, Tick),
+    levels: Vec<Vec<f32>>,
+    /// Each person's relative motion (empty with `motion: false`).
+    views: Vec<Vec<f32>>,
+}
+
+fn measure(s: &Session, p: &Value, id: &str) -> Result<Measured> {
     let people = people_p(s, p)?;
     let range = range_p(s, p)?;
     let extra = extra_p(s, p, &people)?;
     if level_jobs(s, &people, range)?.is_empty() {
-        return Err(bad("edit.autoCut", "the microphone tracks have no clips in the range"));
+        return Err(bad(id, "the microphone tracks have no clips in the range"));
     }
     let (jobs, rows) = all_level_jobs(s, &people, &extra, range)?;
-    let lv = levels(&jobs, rows, range, &mut |_, _| true)?;
-    let tuning = tuning_p(p);
-    let mut heard = Heard::split(&lv, people.len(), &extra);
-    let (shots, reactions) = plan(heard.people, &tuning);
-    let keep = keep_ranges(s, range, &tuning);
-    let on_screen = if p.get("motion").and_then(Value::as_bool).unwrap_or(true) {
+    let levels = levels(&jobs, rows, range, &mut |_, _| true)?;
+    let views = if p.get("motion").and_then(Value::as_bool).unwrap_or(true) {
         let jobs = crate::auto_cut_motion::motion_jobs(s, &people, range)?;
-        let m = crate::auto_cut_motion::motion(&jobs, people.len(), range, &mut |_, _| true)?;
-        crate::auto_cut_motion::shown(&m, &shots, frame_count(range))
+        crate::auto_cut_motion::motion(&jobs, people.len(), range, &mut |_, _| true)?
     } else {
         Vec::new()
     };
+    Ok(Measured { people, extra, range, levels, views })
+}
+
+/// With a learned style, its usual shot length sets the shortest shot.
+pub fn styled_tuning(mut tuning: Tuning, style: Option<&crate::auto_cut_style::Style>) -> Tuning {
+    if let Some(st) = style {
+        tuning.min_shot = (st.shot * 0.6).clamp(1.0, 8.0);
+    }
+    tuning
+}
+
+fn auto_cut(s: &mut Session, p: &Value) -> Result<Value> {
+    let style = crate::auto_cut_style::style_p(p)?;
+    let m = measure(s, p, "edit.autoCut")?;
+    let tuning = styled_tuning(tuning_p(p), style.as_ref());
+    let mut heard = Heard::split(&m.levels, m.people.len(), &m.extra);
+    let (shots, reactions) = plan(heard.people, &tuning);
+    let keep = keep_ranges(s, m.range, &tuning);
+    let on_screen = if m.views.is_empty() { Vec::new() } else { crate::auto_cut_motion::shown(&m.views, &shots, frame_count(m.range)) };
     heard.motion = &on_screen;
     let mut cuts = silences(&heard, &tuning, &reactions, &keep);
-    cuts.extend(dull_parts(&heard, &tuning, &reactions, &keep, &cuts));
-    place(s, &people, &shots, &reactions, &cuts, range, PlaceOpts::from_p(p, extra))
+    let more = match &style {
+        Some(st) => crate::auto_cut_style::styled_cuts(&heard, &m.views, &tuning, st, &reactions, &keep, &cuts),
+        None => dull_parts(&heard, &tuning, &reactions, &keep, &cuts),
+    };
+    cuts.extend(more);
+    let range = m.range;
+    place(s, &m.people, &shots, &reactions, &cuts, range, PlaceOpts::from_p(p, m.extra))
+}
+
+fn learn_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "edit.autoCutLearn";
+    let raw_id = s.state.active_sequence.ok_or(EngineError::NoSequence)?;
+    let edit_id = crate::auto_cut_style::sequence_by(&s.project, p.get("result"))?;
+    if edit_id == raw_id {
+        return Err(bad(ID, "`result` must be the edited sequence, not the active (uncut) one"));
+    }
+    let prior = crate::auto_cut_style::style_p(p)?;
+    let m = measure(s, p, ID)?;
+    let tuning = tuning_p(p);
+    let heard = Heard::split(&m.levels, m.people.len(), &m.extra);
+    let (_, reactions) = plan(heard.people, &tuning);
+    let (Some(raw), Some(edit)) = (s.project.sequence(raw_id), s.project.sequence(edit_id)) else { return Err(EngineError::NoSequence) };
+    let labels = crate::auto_cut_style::labels(raw, edit, &m.people, m.range);
+    let style = crate::auto_cut_style::learn(&heard, &m.views, &reactions, &labels, prior)?;
+    Ok(json!({"summary": style.summary(), "style": style}))
 }
 
 fn place_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1172,7 +1243,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "edit.autoCut",
             "Auto Cut to Speaker…",
-            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"],"sound":"A5"?}],"voices":["A1"]?,"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"muteViews":true?,"trim":true?,"minSilence":2.0?,"pad":0.4?,"keep":0.8?,"motion":true?,"inOut":true?}"#,
+            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"],"sound":"A5"?}],"voices":["A1"]?,"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"muteViews":true?,"trim":true?,"minSilence":2.0?,"pad":0.4?,"keep":0.8?,"motion":true?,"style":{…}?,"inOut":true?}"#,
             auto_cut,
         ),
         spec(
@@ -1180,6 +1251,12 @@ pub fn commands() -> Vec<CommandSpec> {
             "Place Auto Cut",
             r#"{"people":[…],"shots":[{"start":frame,"end":frame,"person":n,"reaction":bool?}],"reactions":[{"start","end","person"}]?,"cuts":[{"start":frame,"end":frame}]?,"voices":["A1"]?,"markers":true?,"muteViews":true?,"inOut":true?}"#,
             place_cmd,
+        ),
+        spec(
+            "edit.autoCutLearn",
+            "Learn Auto Cut from an Edit…",
+            r#"{"result":"비하인드"|id,"people":[…],"voices":["A1"]?,"style":{…}?,"motion":true?,"inOut":true?}"#,
+            learn_cmd,
         ),
     ]
 }
