@@ -11,7 +11,7 @@
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
 //! `autoCut.fill`, `autoCut.add`, `autoCut.name.<n>`, `autoCut.video.<n>`, `autoCut.audio.<n>`,
 //! `autoCut.remove.<n>`, `autoCut.minShot`, `autoCut.reactions`, `autoCut.buildup`, `autoCut.hold`,
-//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.keep`, `autoCut.make`, `autoCut.cancel`.
+//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.motion`, `autoCut.keep`, `autoCut.make`, `autoCut.cancel`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use egui::{Rect, RichText, vec2};
 use filmcraft_engine::auto_cut::{self as ac, Reaction, Shot};
+use filmcraft_engine::auto_cut_motion as motion;
 use filmcraft_engine::track_views::{audio_name, video_name};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -59,6 +60,8 @@ pub struct Settings {
     pub pad: f64,
     /// Percent of the length to keep once the dull parts go (100: off).
     pub keep_percent: f64,
+    /// Look at how busy each view is, too (slower).
+    pub motion: bool,
 }
 
 impl Default for Settings {
@@ -77,6 +80,7 @@ impl Default for Settings {
             min_silence: t.min_silence,
             pad: t.pad,
             keep_percent: t.keep * 100.0,
+            motion: true,
         }
     }
 }
@@ -109,7 +113,7 @@ impl Settings {
             .filter(|r| !r.video.is_empty() && !r.audio.is_empty())
             .map(|r| json!({"name": if r.name.trim().is_empty() { r.video.clone() } else { r.name.trim().to_string() }, "video": r.video, "audio": r.audio, "sound": r.sound}))
             .collect();
-        json!({"people": people, "voices": self.voices, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "muteViews": self.mute_views, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad, "keep": self.keep_percent / 100.0})
+        json!({"people": people, "voices": self.voices, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "muteViews": self.mute_views, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad, "keep": self.keep_percent / 100.0, "motion": self.motion})
     }
 }
 
@@ -201,6 +205,7 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
     let tuning = ac::tuning_p(&req);
     let keep = ac::keep_ranges(&app.session, range, &tuning);
     let n = people.len();
+    let views = if st.motion && tuning.trim { motion::motion_jobs(&app.session, &people, range).map_err(|e| e.to_string())? } else { Vec::new() };
     let job = Arc::new(Mutex::new(Job { label: tl!("Listening to the microphones…").into(), ..Job::default() }));
     let j = job.clone();
     let spawned = std::thread::Builder::new().name("auto-cut".into()).spawn(move || {
@@ -211,8 +216,21 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
                 !g.cancel.load(Ordering::Relaxed)
             })
             .map_err(|e| e.to_string())?;
-            let heard = ac::Heard::split(&lv, n, &extra);
+            let mut heard = ac::Heard::split(&lv, n, &extra);
             let (shots, reactions) = ac::plan(heard.people, &tuning);
+            let on_screen = if views.is_empty() {
+                Vec::new()
+            } else {
+                lock(&j).label = tl!("Watching the views…").into();
+                let m = motion::motion(&views, n, range, &mut |done, total| {
+                    let mut g = lock(&j);
+                    g.progress = done as f32 / total.max(1) as f32;
+                    !g.cancel.load(Ordering::Relaxed)
+                })
+                .map_err(|e| e.to_string())?;
+                motion::shown(&m, &shots, ac::frame_count(range))
+            };
+            heard.motion = &on_screen;
             let silences = ac::silences(&heard, &tuning, &reactions, &keep);
             let dull = ac::dull_parts(&heard, &tuning, &reactions, &keep, &silences);
             let cuts = Cuts { silences, dull };
@@ -417,6 +435,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if st.settings.trim {
             num(app, ui, "autoCut.minSilence", tl!("Shortest silence to cut"), &mut st.settings.min_silence);
             num(app, ui, "autoCut.pad", tl!("Keep before and after words"), &mut st.settings.pad);
+            let r = ui.checkbox(&mut st.settings.motion, tl!("Also look at the picture (a still screen goes first, action stays; takes longer)"));
+            app.auto.add_response("autoCut.motion", &r, tl!("Also look at the picture (a still screen goes first, action stays; takes longer)"));
             ui.horizontal(|ui| {
                 ui.label(tl!("Length to keep"));
                 let r = ui.add(egui::Slider::new(&mut st.settings.keep_percent, 30.0..=100.0).suffix("%").step_by(5.0));

@@ -65,6 +65,7 @@ pub mod speaker_captions;
 pub mod effect_order;
 // Fork: automatic cuts to whoever is talking.
 pub mod auto_cut;
+pub mod auto_cut_motion;
 pub mod sync;
 pub mod transcript;
 pub mod trim;

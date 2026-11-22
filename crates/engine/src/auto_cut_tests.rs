@@ -19,7 +19,7 @@ fn quiet_tuning() -> Tuning {
 }
 
 fn people_only(rows: &[Vec<f32>]) -> Heard<'_> {
-    Heard { people: rows, voices: &[], game: &[] }
+    Heard { people: rows, voices: &[], game: &[], motion: &[] }
 }
 
 fn people_of(shots: &[Shot]) -> Vec<usize> {
@@ -193,7 +193,7 @@ fn talk_on_a_discord_track_loud_game_moments_and_markers_are_not_cut() {
     }
     let voices = [discord];
     let games = [game];
-    let heard = Heard { people: &rows, voices: &voices, game: &games };
+    let heard = Heard { people: &rows, voices: &voices, game: &games, motion: &[] };
     // and the user marked 30 s
     let keep = [((29.0 / FRAME) as usize, (31.5 / FRAME) as usize)];
     let cuts = silences(&heard, &tuning, &[], &keep);

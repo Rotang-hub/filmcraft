@@ -24,6 +24,9 @@
 //! - **Dead air goes.** With `trim` (on by default), every stretch where nobody talks for at least
 //!   `minSilence` is cut out of every unlocked track (sound with picture, captions too), keeping
 //!   `pad` on each side and never inside a big moment.
+//! - **The picture counts.** With `motion` (on by default) each view's movement is measured
+//!   ([`crate::auto_cut_motion`]): a busy view on screen counts like lively talk and a burst of
+//!   action is never cut; a still screen (menu, loading, waiting) goes first.
 //! - **Dull parts go too.** After the silences, the least lively ~5 s pieces (cut between
 //!   sentences) are removed until `keep` (80% by default) of the length is left. Pieces livelier
 //!   than the middle, big moments, loud game or Discord moments and marked parts always stay.
@@ -94,6 +97,9 @@ pub struct Heard<'a> {
     pub people: &'a [Vec<f32>],
     pub voices: &'a [Vec<f32>],
     pub game: &'a [Vec<f32>],
+    /// How busy the view on screen is in each frame (1.0 usual, 0 still, below 0 unknown;
+    /// [`crate::auto_cut_motion`]); empty when the picture was not looked at.
+    pub motion: &'a [f32],
 }
 
 impl<'a> Heard<'a> {
@@ -102,7 +108,7 @@ impl<'a> Heard<'a> {
         let v = (n + extra.voices.len()).min(levels.len());
         let (people, rest) = levels.split_at(n);
         let (voices, game) = rest.split_at(v - n);
-        Self { people, voices, game }
+        Self { people, voices, game, motion: &[] }
     }
 }
 
@@ -572,6 +578,13 @@ fn protected(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[(us
     for l in heard.voices.iter().chain(heard.game) {
         windows.extend(loud_moments(l, 10.0).into_iter().map(around));
     }
+    // a burst of action on screen (a crash, a fight, a sharp turn), held for a second or more
+    if !heard.motion.is_empty() {
+        let mut busy: Vec<bool> = heard.motion.iter().map(|m| *m >= 1.8).collect();
+        close_gaps(&mut busy, 10);
+        drop_short(&mut busy, 20);
+        windows.extend(runs(&busy).into_iter().map(around));
+    }
     windows.extend(keep.iter().copied());
     windows
 }
@@ -617,6 +630,14 @@ pub fn dull_parts(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: 
                 let loud = if x > v.loud { 1.0 } else { 0.0 };
                 *s += 1.0 + above + loud;
             }
+        }
+    }
+    // the picture: a busy view counts like someone talking, a still one (menu, loading) adds nothing
+    for (f, m) in heard.motion.iter().enumerate() {
+        if *m >= 0.0
+            && let Some(s) = live.get_mut(f)
+        {
+            *s += 1.5 * (*m as f64).min(2.0);
         }
     }
     let removed: Vec<bool> = {
@@ -1058,9 +1079,17 @@ fn auto_cut(s: &mut Session, p: &Value) -> Result<Value> {
     let (jobs, rows) = all_level_jobs(s, &people, &extra, range)?;
     let lv = levels(&jobs, rows, range, &mut |_, _| true)?;
     let tuning = tuning_p(p);
-    let heard = Heard::split(&lv, people.len(), &extra);
+    let mut heard = Heard::split(&lv, people.len(), &extra);
     let (shots, reactions) = plan(heard.people, &tuning);
     let keep = keep_ranges(s, range, &tuning);
+    let on_screen = if p.get("motion").and_then(Value::as_bool).unwrap_or(true) {
+        let jobs = crate::auto_cut_motion::motion_jobs(s, &people, range)?;
+        let m = crate::auto_cut_motion::motion(&jobs, people.len(), range, &mut |_, _| true)?;
+        crate::auto_cut_motion::shown(&m, &shots, frame_count(range))
+    } else {
+        Vec::new()
+    };
+    heard.motion = &on_screen;
     let mut cuts = silences(&heard, &tuning, &reactions, &keep);
     cuts.extend(dull_parts(&heard, &tuning, &reactions, &keep, &cuts));
     place(s, &people, &shots, &reactions, &cuts, range, PlaceOpts::from_p(p, extra))
@@ -1143,7 +1172,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "edit.autoCut",
             "Auto Cut to Speaker…",
-            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"],"sound":"A5"?}],"voices":["A1"]?,"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"muteViews":true?,"trim":true?,"minSilence":2.0?,"pad":0.4?,"keep":0.8?,"inOut":true?}"#,
+            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"],"sound":"A5"?}],"voices":["A1"]?,"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"muteViews":true?,"trim":true?,"minSilence":2.0?,"pad":0.4?,"keep":0.8?,"motion":true?,"inOut":true?}"#,
             auto_cut,
         ),
         spec(

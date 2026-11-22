@@ -3810,3 +3810,5 @@
 	removed {total} sec (silence {quiet} sec, dull parts {dull} sec)	{total}초 잘라냄 (침묵 {quiet}초, 지루한 구간 {dull}초)
 	Length to keep	남길 분량
 	Below 100%, the dullest talk goes too, cut between sentences. Lively talk, big moments and marked parts stay.	100% 미만이면 가장 지루한 구간도 문장 사이에서 잘라냅니다. 활발한 대화, 큰 리액션, 마커 찍은 부분은 남깁니다.
+	Watching the views…	화면을 보는 중…
+	Also look at the picture (a still screen goes first, action stays; takes longer)	화면도 보기 (멈춘 화면은 먼저 자르고 액션은 남김, 분석이 더 오래 걸림)
