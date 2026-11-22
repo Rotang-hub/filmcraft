@@ -17,6 +17,9 @@
 //!   seconds and each at most 4 seconds long (a lively stretch must not become one long shot). A
 //!   marker names each reaction for review.
 //! - **No jitter.** A shot shorter than `minShot` joins the shot before it (reaction shots stay).
+//! - **Dead air goes.** With `trim` (on by default), every stretch where nobody talks for at least
+//!   `minSilence` is cut out of every unlocked track (sound with picture, captions too), keeping
+//!   `pad` on each side and never inside a big moment.
 //!
 //! The cut is built on a video track of its own, "Auto Cut", above the people's tracks (below any
 //! speaker caption tracks), from pieces of each person's own clips (same media, same timing, their
@@ -69,11 +72,17 @@ pub struct Tuning {
     pub buildup: f64,
     pub hold: f64,
     pub reactions: bool,
+    /// Cut out the stretches where nobody talks (on every track, so sound and picture stay together).
+    pub trim: bool,
+    /// Shortest silence that is cut out.
+    pub min_silence: f64,
+    /// Kept on each side of a cut, so words are not clipped.
+    pub pad: f64,
 }
 
 impl Default for Tuning {
     fn default() -> Self {
-        Self { min_shot: 1.5, buildup: 2.5, hold: 1.0, reactions: true }
+        Self { min_shot: 1.5, buildup: 2.5, hold: 1.0, reactions: true, trim: true, min_silence: 1.0, pad: 0.25 }
     }
 }
 
@@ -440,6 +449,48 @@ pub fn plan(levels: &[Vec<f32>], tuning: &Tuning) -> (Vec<Shot>, Vec<Reaction>) 
     (out, reactions)
 }
 
+/// The stretches to cut out: where nobody is talking for at least `min_silence`, less `pad` on
+/// each side, never in a big moment's build-up or hold. Frames `[start, end)`.
+pub fn silences(levels: &[Vec<f32>], tuning: &Tuning, reactions: &[Reaction]) -> Vec<(usize, usize)> {
+    if !tuning.trim || levels.is_empty() {
+        return Vec::new();
+    }
+    let n = levels.iter().map(Vec::len).max().unwrap_or(0);
+    let voices: Vec<Voice> = levels.iter().map(|l| voice(l)).collect();
+    let quiet: Vec<bool> = (0..n).map(|f| !voices.iter().any(|v| v.talking.get(f).copied().unwrap_or(false))).collect();
+    let min = (tuning.min_silence.max(0.2) / FRAME).ceil() as usize;
+    let pad = (tuning.pad.max(0.0) / FRAME).round() as usize;
+    let buildup = (tuning.buildup.max(0.0) / FRAME) as usize;
+    let hold = (tuning.hold.max(0.0) / FRAME) as usize;
+    let mut out = Vec::new();
+    for (a, b) in runs(&quiet) {
+        if b - a < min {
+            continue;
+        }
+        // the very start and end keep no padding outside the range
+        let s = if a == 0 { 0 } else { a + pad };
+        let e = if b >= n { n } else { b.saturating_sub(pad) };
+        if e <= s {
+            continue;
+        }
+        // never inside a big moment
+        let mut pieces = vec![(s, e)];
+        for r in reactions {
+            let (ra, rb) = (r.start.saturating_sub(buildup), r.end + hold);
+            pieces = pieces
+                .into_iter()
+                .flat_map(
+                    |(x, y)| {
+                        if y <= ra || x >= rb { vec![(x, y)] } else { [(x, ra.max(x)), (rb.min(y), y)].into_iter().filter(|(p, q)| q > p).collect() }
+                    },
+                )
+                .collect();
+        }
+        out.extend(pieces.into_iter().filter(|(x, y)| y - x >= min.min(4)));
+    }
+    out
+}
+
 /// How much of the time each person is heard talking (0–1), to check the microphones.
 pub fn talk_share(levels: &[Vec<f32>]) -> Vec<f32> {
     levels
@@ -452,7 +503,15 @@ pub fn talk_share(levels: &[Vec<f32>]) -> Vec<f32> {
 }
 
 /// Build the cut on the "Auto Cut" track (replacing what it held in `range`), one undo step.
-pub fn place(s: &mut Session, people: &[Person], shots: &[Shot], reactions: &[Reaction], range: (Tick, Tick), markers: bool) -> Result<Value> {
+pub fn place(
+    s: &mut Session,
+    people: &[Person],
+    shots: &[Shot],
+    reactions: &[Reaction],
+    cuts: &[(usize, usize)],
+    range: (Tick, Tick),
+    markers: bool,
+) -> Result<Value> {
     let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
     let rate = seq.settings.frame_rate;
     let at = |f: usize| rate.snap_nearest(range.0 + Tick::from_seconds_f64(f as f64 * FRAME)).clamp(range.0, range.1);
@@ -460,6 +519,9 @@ pub fn place(s: &mut Session, people: &[Person], shots: &[Shot], reactions: &[Re
     let shots: Vec<(Tick, Tick, usize, bool)> = shots.iter().map(|sh| (at(sh.start), at(sh.end), sh.person, sh.reaction)).filter(|x| x.1 > x.0).collect();
     let marks: Vec<(Tick, String)> =
         if markers { reactions.iter().filter_map(|r| people.get(r.person).map(|p| (at(r.start), p.name.clone()))).collect() } else { Vec::new() };
+    let cuts: Vec<filmcraft_time::TimeRange> =
+        cuts.iter().map(|(a, b)| (at(*a), at(*b))).filter(|(a, b)| b > a).map(|(a, b)| filmcraft_time::TimeRange::from_bounds(a, b)).collect();
+    let cuts = filmcraft_edit::transcript::merge_ranges(cuts);
     s.edit_sequence("Auto Cut", move |q, ctx, st| {
         // the cut's track: replaced in the range, or made above the people's views
         let idx = match q.video_tracks.iter().position(|t| t.name == TRACK_NAME) {
@@ -513,7 +575,11 @@ pub fn place(s: &mut Session, people: &[Person], shots: &[Shot], reactions: &[Re
         if let Some(t) = q.video_tracks.get_mut(idx) {
             t.sort();
         }
+        // the silences go, on every unlocked track (sound with picture), right to left
+        let removed = filmcraft_edit::transcript::ripple_delete_ranges(q, cuts.clone(), ctx);
+        let shift = |t: Tick| cuts.iter().filter(|c| c.end() <= t).fold(Tick::ZERO, |acc, c| acc + c.duration);
         for (t, name) in &marks {
+            let t = &(*t - shift(*t));
             q.markers.push(Marker {
                 url: String::new(),
                 author: String::new(),
@@ -531,7 +597,8 @@ pub fn place(s: &mut Session, people: &[Person], shots: &[Shot], reactions: &[Re
         st.selection = placed.clone();
         let mut counts: Vec<Value> = per.iter().filter_map(|(p, n)| people.get(*p).map(|x| json!({"name": x.name, "shots": n}))).collect();
         counts.sort_by_key(|v| v["name"].as_str().unwrap_or_default().to_string());
-        Ok(json!({"shots": shots.len(), "clips": placed.len(), "reactions": marks.len(), "people": counts}))
+        st.selection.retain(|id| q.find_item(*id).is_some());
+        Ok(json!({"shots": shots.len(), "clips": placed.len(), "reactions": marks.len(), "people": counts, "cuts": cuts.len(), "removed": removed.seconds()}))
     })
 }
 
@@ -590,6 +657,9 @@ pub fn tuning_p(p: &Value) -> Tuning {
         buildup: sec("buildup", d.buildup),
         hold: sec("hold", d.hold),
         reactions: p.get("reactions").and_then(Value::as_bool).unwrap_or(true),
+        trim: p.get("trim").and_then(Value::as_bool).unwrap_or(true),
+        min_silence: sec("minSilence", d.min_silence).max(0.2),
+        pad: sec("pad", d.pad).min(5.0),
     }
 }
 
@@ -601,8 +671,10 @@ fn auto_cut(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("edit.autoCut", "the microphone tracks have no clips in the range"));
     }
     let lv = levels(&jobs, people.len(), range, &mut |_, _| true)?;
-    let (shots, reactions) = plan(&lv, &tuning_p(p));
-    place(s, &people, &shots, &reactions, range, p.get("markers").and_then(Value::as_bool).unwrap_or(true))
+    let tuning = tuning_p(p);
+    let (shots, reactions) = plan(&lv, &tuning);
+    let cuts = silences(&lv, &tuning, &reactions);
+    place(s, &people, &shots, &reactions, &cuts, range, p.get("markers").and_then(Value::as_bool).unwrap_or(true))
 }
 
 fn place_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -641,7 +713,26 @@ fn place_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     if shots.is_empty() {
         return Err(bad("edit.autoCutPlace", "no shots"));
     }
-    place(s, &people, &shots, &reactions, range, p.get("markers").and_then(Value::as_bool).unwrap_or(true))
+    let cuts: Vec<(usize, usize)> = p
+        .get("cuts")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .take(MAX_FRAMES)
+                .filter_map(|v| {
+                    let g = |k: &str| v.get(k).and_then(Value::as_u64).map(|x| x as usize);
+                    let (x, y) = (g("start")?, g("end")?.min(n));
+                    (y > x).then_some((x, y))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    place(s, &people, &shots, &reactions, &cuts, range, p.get("markers").and_then(Value::as_bool).unwrap_or(true))
+}
+
+/// Cuts as JSON (`[{start, end}]`, frames).
+pub fn cuts_json(cuts: &[(usize, usize)]) -> Value {
+    json!(cuts.iter().map(|(a, b)| json!({"start": a, "end": b})).collect::<Vec<_>>())
 }
 
 pub fn shots_json(shots: &[Shot], reactions: &[Reaction]) -> (Value, Value) {
@@ -662,13 +753,13 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "edit.autoCut",
             "Auto Cut to Speaker…",
-            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"]}],"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"inOut":true?}"#,
+            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"]}],"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"trim":true?,"minSilence":1.0?,"pad":0.25?,"inOut":true?}"#,
             auto_cut,
         ),
         spec(
             "edit.autoCutPlace",
             "Place Auto Cut",
-            r#"{"people":[…],"shots":[{"start":frame,"end":frame,"person":n,"reaction":bool?}],"reactions":[{"start","end","person"}]?,"markers":true?,"inOut":true?}"#,
+            r#"{"people":[…],"shots":[{"start":frame,"end":frame,"person":n,"reaction":bool?}],"reactions":[{"start","end","person"}]?,"cuts":[{"start":frame,"end":frame}]?,"markers":true?,"inOut":true?}"#,
             place_cmd,
         ),
     ]

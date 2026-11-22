@@ -105,6 +105,72 @@ fn nothing_to_measure_plans_nothing() {
     assert_eq!(people_of(&shots), [0], "silence: one shot on the first view");
 }
 
+#[test]
+fn long_silences_are_cut_with_padding_and_short_pauses_stay() {
+    let n = (20.0 / FRAME) as usize;
+    // A talks 0–5 s, a 0.5 s pause, 5.5–8 s; nobody until B at 12–18 s; then quiet to the end
+    let a = row(n, &[(0.0, 5.0, -20.0), (5.5, 8.0, -20.0)]);
+    let b = row(n, &[(12.0, 18.0, -20.0)]);
+    let tuning = quiet_tuning();
+    let cuts = silences(&[a.clone(), b.clone()], &tuning, &[]);
+    let secs: Vec<(f64, f64)> = cuts.iter().map(|(x, y)| (*x as f64 * FRAME, *y as f64 * FRAME)).collect();
+    assert_eq!(cuts.len(), 2, "{secs:?}");
+    // the gap 8–12 s goes, less the padding (and the hang-on after words)
+    let (s0, e0) = secs[0];
+    assert!((8.0..=9.0).contains(&s0) && (11.0..12.0).contains(&e0), "{secs:?}");
+    // the quiet tail goes to the very end
+    assert!(secs[1].0 >= 18.0 && (secs[1].1 - 20.0).abs() < 1e-9, "{secs:?}");
+    // the short pause inside A's talk stays
+    assert!(secs.iter().all(|(x, y)| *y <= 5.0 || *x >= 5.5), "{secs:?}");
+    // off: nothing is cut
+    assert!(silences(&[a, b], &Tuning { trim: false, ..tuning }, &[]).is_empty());
+}
+
+#[test]
+fn a_big_moment_and_its_build_up_are_never_cut() {
+    let n = (20.0 / FRAME) as usize;
+    let a = row(n, &[(0.0, 2.0, -20.0), (15.0, 20.0, -20.0)]);
+    let b = row(n, &[]);
+    let r = Reaction { start: (10.0 / FRAME) as usize, end: (11.0 / FRAME) as usize, person: 1 };
+    let tuning = Tuning { buildup: 2.5, hold: 1.0, ..quiet_tuning() };
+    let cuts = silences(&[a, b], &tuning, &[r]);
+    let keep = ((7.5 / FRAME) as usize, (12.0 / FRAME) as usize);
+    assert!(cuts.iter().all(|(x, y)| *y <= keep.0 || *x >= keep.1), "{cuts:?}");
+    assert!(cuts.len() == 2, "before and after the moment: {cuts:?}");
+}
+
+#[test]
+fn cutting_silences_cuts_sound_and_picture_together_in_one_undo() {
+    let mut s = demo();
+    let people = json!([{"name": "A", "video": "V1", "audio": "A1"}, {"name": "B", "video": "V2", "audio": "A2"}]);
+    let before = s.active_sequence().unwrap().clone();
+    let end_of = |items: &[filmcraft_project::TrackItem]| items.iter().map(|i| i.end()).max().unwrap_or(Tick::ZERO);
+    let (v_before, a_before) = (end_of(&before.video_tracks[0].items), end_of(&before.audio_tracks[0].items));
+    // 1–2 s is cut (frames of 0.05 s)
+    let r = s
+        .execute(
+            "edit.autoCutPlace",
+            json!({"people": people, "shots": [{"start": 0, "end": 100, "person": 0}], "cuts": [{"start": 20, "end": 40}, {"start": 30, "end": 35}, {"start": 9, "end": 3}]}),
+        )
+        .unwrap();
+    assert_eq!(r["cuts"], 1, "overlaps merge, backwards ranges are dropped: {r}");
+    let q = s.active_sequence().unwrap();
+    let rate = q.settings.frame_rate;
+    let gone = rate.snap_nearest(Tick::from_seconds_f64(2.0)) - rate.snap_nearest(Tick::from_seconds_f64(1.0));
+    assert!((r["removed"].as_f64().unwrap() - gone.seconds()).abs() < 1e-9);
+    // picture, sound and the cut all shrink by the same amount
+    assert_eq!(end_of(&q.video_tracks[0].items), v_before - gone);
+    assert_eq!(end_of(&q.audio_tracks[0].items), a_before - gone);
+    let cut = q.video_tracks.iter().find(|t| t.name == TRACK_NAME).unwrap();
+    assert_eq!(end_of(&cut.items), rate.snap_nearest(Tick::from_seconds_f64(5.0)) - gone);
+    q.check().unwrap();
+    // one undo brings everything back
+    s.execute("edit.undo", json!({})).unwrap();
+    let q = s.active_sequence().unwrap();
+    assert_eq!(q.video_tracks[0].items, before.video_tracks[0].items);
+    assert_eq!(q.audio_tracks[0].items, before.audio_tracks[0].items);
+}
+
 /// The demo project with a second view on V2 (a copy of V1) and microphones on A1 / A2.
 fn demo() -> Session {
     let mut s = Session::default();

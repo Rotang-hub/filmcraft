@@ -79,6 +79,15 @@ fn make_auto_cut_builds_the_cut_track_from_the_views() {
             let _ = img.save(dir.join("auto-cut.png"));
         }
     }
+    let els = d.ok("ui.elements", json!({})).to_string();
+    for id in ["autoCut.trim", "autoCut.minSilence", "autoCut.pad"] {
+        assert!(els.contains(id), "{id} is shown");
+    }
+    // the button sits below the options: scroll the panel down to it
+    for _ in 0..4 {
+        d.ok("ui.scroll", json!({"id": "autoCut.trim", "dx": 0.0, "dy": -400.0}));
+        d.frames(2);
+    }
     d.ok("ui.click", json!({"id": "autoCut.make"}));
     let mut made = false;
     for _ in 0..600 {

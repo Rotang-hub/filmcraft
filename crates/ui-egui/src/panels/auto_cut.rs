@@ -11,7 +11,7 @@
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
 //! `autoCut.fill`, `autoCut.add`, `autoCut.name.<n>`, `autoCut.video.<n>`, `autoCut.audio.<n>`,
 //! `autoCut.remove.<n>`, `autoCut.minShot`, `autoCut.reactions`, `autoCut.buildup`, `autoCut.hold`,
-//! `autoCut.markers`, `autoCut.make`, `autoCut.cancel`.
+//! `autoCut.markers`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.make`, `autoCut.cancel`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
@@ -49,12 +49,25 @@ pub struct Settings {
     pub hold: f64,
     pub reactions: bool,
     pub markers: bool,
+    pub trim: bool,
+    pub min_silence: f64,
+    pub pad: f64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         let t = ac::Tuning::default();
-        Self { people: Vec::new(), min_shot: t.min_shot, buildup: t.buildup, hold: t.hold, reactions: true, markers: true }
+        Self {
+            people: Vec::new(),
+            min_shot: t.min_shot,
+            buildup: t.buildup,
+            hold: t.hold,
+            reactions: true,
+            markers: true,
+            trim: t.trim,
+            min_silence: t.min_silence,
+            pad: t.pad,
+        }
     }
 }
 
@@ -71,7 +84,7 @@ impl Settings {
         };
         let mut s = path.and_then(read).unwrap_or_default();
         s.people.truncate(MAX_PEOPLE);
-        for v in [&mut s.min_shot, &mut s.buildup, &mut s.hold] {
+        for v in [&mut s.min_shot, &mut s.buildup, &mut s.hold, &mut s.min_silence, &mut s.pad] {
             *v = if v.is_finite() { v.clamp(0.0, 30.0) } else { 0.0 };
         }
         s
@@ -84,16 +97,19 @@ impl Settings {
             .filter(|r| !r.video.is_empty() && !r.audio.is_empty())
             .map(|r| json!({"name": if r.name.trim().is_empty() { r.video.clone() } else { r.name.trim().to_string() }, "video": r.video, "audio": r.audio}))
             .collect();
-        json!({"people": people, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers})
+        json!({"people": people, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad})
     }
 }
+
+/// What the worker found: shots, big moments, silences to cut, and how much each person talks.
+type Planned = (Vec<Shot>, Vec<Reaction>, Vec<(usize, usize)>, Vec<f32>);
 
 #[derive(Default)]
 struct Job {
     label: String,
     progress: f32,
     cancel: AtomicBool,
-    done: Option<Result<(Vec<Shot>, Vec<Reaction>, Vec<f32>), String>>,
+    done: Option<Result<Planned, String>>,
 }
 
 #[derive(Clone, Default)]
@@ -172,7 +188,8 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
             })
             .map_err(|e| e.to_string())?;
             let (shots, reactions) = ac::plan(&lv, &tuning);
-            Ok((shots, reactions, ac::talk_share(&lv)))
+            let cuts = ac::silences(&lv, &tuning, &reactions);
+            Ok((shots, reactions, cuts, ac::talk_share(&lv)))
         }))
         .unwrap_or_else(|_| Err("the auto cut worker stopped unexpectedly".into()));
         lock(&j).done = Some(r);
@@ -183,8 +200,8 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
     Ok((job, req))
 }
 
-fn finish(app: &mut FilmcraftApp, result: Result<(Vec<Shot>, Vec<Reaction>, Vec<f32>), String>, req: Option<Value>) {
-    let (shots, reactions, share) = match result {
+fn finish(app: &mut FilmcraftApp, result: Result<Planned, String>, req: Option<Value>) {
+    let (shots, reactions, cuts, share) = match result {
         Ok(x) => x,
         Err(e) => {
             app.ui.status = e;
@@ -199,8 +216,16 @@ fn finish(app: &mut FilmcraftApp, result: Result<(Vec<Shot>, Vec<Reaction>, Vec<
     let (s, r) = ac::shots_json(&shots, &reactions);
     req["shots"] = s;
     req["reactions"] = r;
+    req["cuts"] = ac::cuts_json(&cuts);
     let mut status = match app.session.execute("edit.autoCutPlace", req) {
-        Ok(v) => tlf!("Auto Cut: {n} shots, {k} big moments marked", n = v["shots"].as_u64().unwrap_or(0), k = v["reactions"].as_u64().unwrap_or(0)),
+        Ok(v) => {
+            let mut m = tlf!("Auto Cut: {n} shots, {k} big moments marked", n = v["shots"].as_u64().unwrap_or(0), k = v["reactions"].as_u64().unwrap_or(0));
+            let secs = v["removed"].as_f64().unwrap_or(0.0);
+            if secs > 0.0 {
+                m.push_str(&format!(" · {}", tlf!("{n} silences cut ({secs} sec)", n = v["cuts"].as_u64().unwrap_or(0), secs = format!("{secs:.1}"))));
+            }
+            m
+        }
         Err(e) => e.to_string(),
     };
     status.push_str(&format!(" · {} {}", tl!("Heard talking:"), heard.join(", ")));
@@ -306,6 +331,13 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             num(app, ui, "autoCut.hold", tl!("Hold after it"), &mut st.settings.hold);
             let r = ui.checkbox(&mut st.settings.markers, tl!("Mark big moments on the timeline"));
             app.auto.add_response("autoCut.markers", &r, tl!("Mark big moments on the timeline"));
+        }
+        let r = ui.checkbox(&mut st.settings.trim, tl!("Cut out the parts where nobody talks"));
+        app.auto.add_response("autoCut.trim", &r, tl!("Cut out the parts where nobody talks"));
+        if st.settings.trim {
+            num(app, ui, "autoCut.minSilence", tl!("Shortest silence to cut"), &mut st.settings.min_silence);
+            num(app, ui, "autoCut.pad", tl!("Keep before and after words"), &mut st.settings.pad);
+            ui.label(RichText::new(tl!("Every track is cut together, so the sound stays with the picture.")).small().color(t.text_dim));
         }
         ui.label(RichText::new(tl!("With In and Out marked, only that part is cut.")).small().color(t.text_dim));
         ui.add_space(6.0);

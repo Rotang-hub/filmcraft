@@ -3798,3 +3798,8 @@
 	No head-caption preset has this name, so this track gets no captions. Use it to note what the track is (a call, game sound…).	이 이름의 머리 자막 프리셋이 없어서 이 트랙은 자막을 만들지 않아요. 트랙 설명(디스코드, 게임 소리 등)을 적어 두는 용도로 쓰세요.
 	Heard talking:	말한 비율:
 	check the microphone track of {who}	{who}의 마이크 트랙을 확인하세요
+	Cut out the parts where nobody talks	말 없는 구간 잘라내기
+	Shortest silence to cut	이보다 긴 침묵만 자르기
+	Keep before and after words	말 앞뒤 여유
+	Every track is cut together, so the sound stays with the picture.	모든 트랙을 함께 잘라서 소리와 화면이 같이 잘립니다.
+	{n} silences cut ({secs} sec)	침묵 {n}곳 잘라냄 ({secs}초)
