@@ -80,7 +80,7 @@ fn make_auto_cut_builds_the_cut_track_from_the_views() {
         }
     }
     let els = d.ok("ui.elements", json!({})).to_string();
-    for id in ["autoCut.trim", "autoCut.minSilence", "autoCut.pad", "autoCut.sound.0", "autoCut.voice.A3"] {
+    for id in ["autoCut.trim", "autoCut.minSilence", "autoCut.pad", "autoCut.sound.0", "autoCut.voice.A3", "autoCut.keep"] {
         assert!(els.contains(id), "{id} is shown");
     }
     // the button sits below the options: scroll the panel down to it

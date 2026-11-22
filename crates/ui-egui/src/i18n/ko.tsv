@@ -3802,9 +3802,11 @@
 	Shortest silence to cut	이보다 긴 침묵만 자르기
 	Keep before and after words	말 앞뒤 여유
 	Every track is cut together, so the sound stays with the picture.	모든 트랙을 함께 잘라서 소리와 화면이 같이 잘립니다.
-	{n} silences cut ({secs} sec)	침묵 {n}곳 잘라냄 ({secs}초)
 	the views have no sound of their own linked (only microphones), so no Auto Cut audio track	화면 클립에 연결된 소리가 마이크 트랙뿐이라 Auto Cut 오디오 트랙을 만들지 않음
 	muted the original view sound: {tracks}	원래 화면 소리 음소거: {tracks}
 	Mute the views' original sound (the Auto Cut audio track plays it)	원래 화면 소리 음소거 (Auto Cut 오디오 트랙에서 재생)
 	Game sound	게임 소리
 	Other voice tracks (Discord…): kept whole, their talk is never cut	다른 목소리 트랙 (디스코드 등): 통째로 유지, 이 트랙의 말소리는 자르지 않음
+	removed {total} sec (silence {quiet} sec, dull parts {dull} sec)	{total}초 잘라냄 (침묵 {quiet}초, 지루한 구간 {dull}초)
+	Length to keep	남길 분량
+	Below 100%, the dullest talk goes too, cut between sentences. Lively talk, big moments and marked parts stay.	100% 미만이면 가장 지루한 구간도 문장 사이에서 잘라냅니다. 활발한 대화, 큰 리액션, 마커 찍은 부분은 남깁니다.

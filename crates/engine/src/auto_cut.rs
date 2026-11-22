@@ -24,6 +24,9 @@
 //! - **Dead air goes.** With `trim` (on by default), every stretch where nobody talks for at least
 //!   `minSilence` is cut out of every unlocked track (sound with picture, captions too), keeping
 //!   `pad` on each side and never inside a big moment.
+//! - **Dull parts go too.** After the silences, the least lively ~5 s pieces (cut between
+//!   sentences) are removed until `keep` (80% by default) of the length is left. Pieces livelier
+//!   than the middle, big moments, loud game or Discord moments and marked parts always stay.
 //!
 //! The cut is built on a video track of its own, "Auto Cut", above the people's tracks (below any
 //! speaker caption tracks), from pieces of each person's own clips (same media, same timing, their
@@ -116,11 +119,14 @@ pub struct Tuning {
     pub min_silence: f64,
     /// Kept on each side of a cut, so words are not clipped.
     pub pad: f64,
+    /// Share of the (silence-trimmed) length to keep: the dullest parts go until this is left
+    /// (1.0: off). Lively talk, big moments and markers always stay.
+    pub keep: f64,
 }
 
 impl Default for Tuning {
     fn default() -> Self {
-        Self { min_shot: 1.5, buildup: 2.5, hold: 1.0, reactions: true, trim: true, min_silence: 2.0, pad: 0.4 }
+        Self { min_shot: 1.5, buildup: 2.5, hold: 1.0, reactions: true, trim: true, min_silence: 2.0, pad: 0.4, keep: 0.8 }
     }
 }
 
@@ -539,17 +545,7 @@ pub fn silences(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[
     let quiet: Vec<bool> = (0..n).map(|f| !talkers.iter().any(|v| v.talking.get(f).copied().unwrap_or(false))).collect();
     let min = (tuning.min_silence.max(0.2) / FRAME).ceil() as usize;
     let pad = (tuning.pad.max(0.0) / FRAME).round() as usize;
-    let buildup = (tuning.buildup.max(0.0) / FRAME) as usize;
-    let hold = (tuning.hold.max(0.0) / FRAME) as usize;
-    let around = |(a, b): (usize, usize)| (a.saturating_sub(buildup), b.saturating_add(hold));
-    let mut windows: Vec<(usize, usize)> = reactions.iter().map(|r| around((r.start, r.end))).collect();
-    for l in heard.voices {
-        windows.extend(loud_moments(l, 10.0).into_iter().map(around));
-    }
-    for l in heard.game {
-        windows.extend(loud_moments(l, 10.0).into_iter().map(around));
-    }
-    windows.extend(keep.iter().copied());
+    let windows = protected(heard, tuning, reactions, keep);
     let mut out = Vec::new();
     for (a, b) in runs(&quiet) {
         if b - a < min {
@@ -563,6 +559,126 @@ pub fn silences(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[
         }
         out.extend(carve(vec![(s, e)], &windows).into_iter().filter(|(x, y)| y - x >= min.min(4)));
     }
+    out
+}
+
+/// What is never cut: big moments, loud moments on a voice track or in the game sound (each with
+/// its build-up and hold), and the `keep` ranges.
+fn protected(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    let buildup = (tuning.buildup.max(0.0) / FRAME) as usize;
+    let hold = (tuning.hold.max(0.0) / FRAME) as usize;
+    let around = |(a, b): (usize, usize)| (a.saturating_sub(buildup), b.saturating_add(hold));
+    let mut windows: Vec<(usize, usize)> = reactions.iter().map(|r| around((r.start, r.end))).collect();
+    for l in heard.voices.iter().chain(heard.game) {
+        windows.extend(loud_moments(l, 10.0).into_iter().map(around));
+    }
+    windows.extend(keep.iter().copied());
+    windows
+}
+
+/// The dull parts to cut after the silences, until `tuning.keep` of the length is left.
+///
+/// The timeline is split into pieces of about 5 s (3–10 s) at the moments nobody is making a
+/// sound (between sentences), so a cut never lands inside a word when it can be helped. Each
+/// piece scores how lively it is: how many people talk and how far above their usual level,
+/// with laughing and shouting counting extra. The lowest-scoring pieces go first; a piece that
+/// touches a protected moment or scores above the middle never goes. Frames `[start, end)`.
+pub fn dull_parts(heard: &Heard, tuning: &Tuning, reactions: &[Reaction], keep: &[(usize, usize)], silences: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if !tuning.trim || tuning.keep >= 0.999 || heard.people.is_empty() {
+        return Vec::new();
+    }
+    let n = heard.people.iter().chain(heard.voices).map(Vec::len).max().unwrap_or(0);
+    if n == 0 {
+        return Vec::new();
+    }
+    let rows: Vec<&Vec<f32>> = heard.people.iter().chain(heard.voices).collect();
+    let talkers: Vec<Voice> = rows.iter().map(|l| voice(l)).collect();
+    // liveliness per frame, and where nobody makes a sound at all (a safe place to cut)
+    let mut live = vec![0.0f64; n];
+    let mut gap = vec![true; n];
+    // how much sound there is in each frame (rows sounding, then how far above): where to cut when
+    // there is no gap
+    let mut sound = vec![0.0f64; n];
+    for (l, v) in rows.iter().zip(&talkers) {
+        for f in 0..n {
+            let x = l.get(f).copied().unwrap_or(SILENT);
+            if x > v.threshold {
+                if let Some(g) = gap.get_mut(f) {
+                    *g = false;
+                }
+                if let Some(s) = sound.get_mut(f) {
+                    *s += 100.0 + (x - v.threshold) as f64;
+                }
+            }
+            if v.talking.get(f).copied().unwrap_or(false)
+                && let Some(s) = live.get_mut(f)
+            {
+                let above = ((x - v.threshold) / 10.0).clamp(0.0, 1.5) as f64;
+                let loud = if x > v.loud { 1.0 } else { 0.0 };
+                *s += 1.0 + above + loud;
+            }
+        }
+    }
+    let removed: Vec<bool> = {
+        let mut r = vec![false; n];
+        for (a, b) in silences {
+            for x in r.iter_mut().take((*b).min(n)).skip(*a) {
+                *x = true;
+            }
+        }
+        r
+    };
+    let windows = protected(heard, tuning, reactions, keep);
+    // pieces, cut at gaps
+    let (lo, hi, aim) = ((3.0 / FRAME) as usize, (10.0 / FRAME) as usize, (5.0 / FRAME) as usize);
+    let mut pieces: Vec<(usize, usize)> = Vec::new();
+    let mut a = 0usize;
+    while a < n {
+        let end = (a + hi).min(n);
+        if n - a <= hi {
+            pieces.push((a, n));
+            break;
+        }
+        // the gap nearest the aim, else the quietest frame
+        let b = (a + lo..end)
+            .filter(|f| gap.get(*f).copied().unwrap_or(false))
+            .min_by_key(|f| f.abs_diff(a + aim))
+            .or_else(|| (a + lo..end).min_by(|x, y| sound.get(*x).unwrap_or(&0.0).total_cmp(sound.get(*y).unwrap_or(&0.0))))
+            .unwrap_or(end);
+        pieces.push((a, b));
+        a = b;
+    }
+    // score what is left of each piece once the silences are gone
+    let mut scored: Vec<(f64, usize, usize, usize)> = pieces
+        .iter()
+        .filter_map(|(a, b)| {
+            let left = (*a..*b).filter(|f| !removed.get(*f).copied().unwrap_or(true)).count();
+            if left == 0 || windows.iter().any(|(x, y)| x < b && y > a) {
+                return None;
+            }
+            let sum: f64 = (*a..*b).filter(|f| !removed.get(*f).copied().unwrap_or(true)).filter_map(|f| live.get(f)).sum();
+            Some((sum / left as f64, *a, *b, left))
+        })
+        .collect();
+    if scored.is_empty() {
+        return Vec::new();
+    }
+    let mut all: Vec<f64> = scored.iter().map(|x| x.0).collect();
+    all.sort_by(f64::total_cmp);
+    let middle = all.get(all.len() / 2).copied().unwrap_or(0.0);
+    let total = removed.iter().filter(|r| !**r).count();
+    let target = (total as f64 * (1.0 - tuning.keep.clamp(0.0, 1.0))) as usize;
+    scored.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out = Vec::new();
+    let mut gone = 0usize;
+    for (score, a, b, left) in scored {
+        if gone >= target || score > middle {
+            break;
+        }
+        out.push((a, b));
+        gone += left;
+    }
+    out.sort_unstable();
     out
 }
 
@@ -928,6 +1044,7 @@ pub fn tuning_p(p: &Value) -> Tuning {
         trim: p.get("trim").and_then(Value::as_bool).unwrap_or(true),
         min_silence: sec("minSilence", d.min_silence).max(0.2),
         pad: sec("pad", d.pad).min(5.0),
+        keep: f64_p(p, "keep").filter(|v| v.is_finite()).map_or(d.keep, |v| v.clamp(0.3, 1.0)),
     }
 }
 
@@ -943,7 +1060,9 @@ fn auto_cut(s: &mut Session, p: &Value) -> Result<Value> {
     let tuning = tuning_p(p);
     let heard = Heard::split(&lv, people.len(), &extra);
     let (shots, reactions) = plan(heard.people, &tuning);
-    let cuts = silences(&heard, &tuning, &reactions, &keep_ranges(s, range, &tuning));
+    let keep = keep_ranges(s, range, &tuning);
+    let mut cuts = silences(&heard, &tuning, &reactions, &keep);
+    cuts.extend(dull_parts(&heard, &tuning, &reactions, &keep, &cuts));
     place(s, &people, &shots, &reactions, &cuts, range, PlaceOpts::from_p(p, extra))
 }
 
@@ -1024,7 +1143,7 @@ pub fn commands() -> Vec<CommandSpec> {
         spec(
             "edit.autoCut",
             "Auto Cut to Speaker…",
-            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"],"sound":"A5"?}],"voices":["A1"]?,"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"muteViews":true?,"trim":true?,"minSilence":1.0?,"pad":0.25?,"inOut":true?}"#,
+            r#"{"people":[{"name":"라스","video":"V2","audio":"A4"|["A4"],"sound":"A5"?}],"voices":["A1"]?,"minShot":1.5?,"buildup":2.5?,"hold":1.0?,"reactions":true?,"markers":true?,"muteViews":true?,"trim":true?,"minSilence":2.0?,"pad":0.4?,"keep":0.8?,"inOut":true?}"#,
             auto_cut,
         ),
         spec(

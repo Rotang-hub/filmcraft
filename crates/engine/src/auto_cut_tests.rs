@@ -314,6 +314,59 @@ fn a_discord_track_linked_to_the_view_stays_whole_and_only_the_game_sound_follow
     assert!(s.execute("edit.autoCutPlace", json!({"people": bad, "shots": shots})).is_err());
 }
 
+/// Sentences of `len` s with 0.3 s breaths between, at `db`, over `[a, b)` seconds.
+fn chatter(v: &mut [f32], a: f64, b: f64, len: f64, db: f32) {
+    let mut t = a;
+    let n = v.len();
+    while t < b {
+        let e = (t + len).min(b);
+        for x in v.iter_mut().take(((e / FRAME) as usize).min(n)).skip((t / FRAME) as usize) {
+            *x = db;
+        }
+        t = e + 0.3;
+    }
+}
+
+#[test]
+fn the_dullest_talk_goes_until_the_share_to_keep_is_left() {
+    let n = (90.0 / FRAME) as usize;
+    // lively back-and-forth 0–30 s and 60–90 s (both talking, loud); one person mumbling 30–60 s
+    let mut a = vec![-60.0f32; n];
+    let mut b = vec![-60.0f32; n];
+    chatter(&mut a, 0.0, 30.0, 2.0, -12.0);
+    chatter(&mut b, 1.0, 30.0, 2.5, -14.0);
+    chatter(&mut a, 30.3, 60.0, 3.0, -30.0);
+    chatter(&mut a, 60.3, 90.0, 2.0, -12.0);
+    chatter(&mut b, 61.0, 90.0, 2.5, -14.0);
+    let rows = [a, b];
+    let heard = people_only(&rows);
+    let tuning = Tuning { keep: 0.7, ..quiet_tuning() };
+    let sil = silences(&heard, &tuning, &[], &[]);
+    assert!(sil.is_empty(), "nobody is ever quiet for long: {sil:?}");
+    let dull = dull_parts(&heard, &tuning, &[], &[], &sil);
+    let secs: Vec<(f64, f64)> = dull.iter().map(|(x, y)| (*x as f64 * FRAME, *y as f64 * FRAME)).collect();
+    let gone: f64 = secs.iter().map(|(x, y)| y - x).sum();
+    assert!((20.0..=33.0).contains(&gone), "about 30% goes: {gone} {secs:?}");
+    assert!(secs.iter().all(|(x, y)| *x >= 28.0 && *y <= 62.0), "only the mumbling: {secs:?}");
+    // every cut lands where nobody is making a sound
+    for (x, y) in &dull {
+        for f in [*x, *y] {
+            if f > 0 && f < n {
+                assert!(rows.iter().filter(|r| r[f] > -40.0).count() <= 1, "cut where two people talk at {}", f as f64 * FRAME);
+                let t = f as f64 * FRAME;
+                if (31.0..59.0).contains(&t) {
+                    assert!(rows.iter().all(|r| r[f] < -40.0), "cut inside a word at {t}");
+                }
+            }
+        }
+    }
+    // a marked part stays; off keeps everything
+    let keep = [((40.0 / FRAME) as usize, (50.0 / FRAME) as usize)];
+    let marked = dull_parts(&heard, &tuning, &[], &keep, &sil);
+    assert!(marked.iter().all(|(x, y)| *y <= keep[0].0 || *x >= keep[0].1), "{marked:?}");
+    assert!(dull_parts(&heard, &Tuning { keep: 1.0, ..tuning }, &[], &[], &sil).is_empty());
+}
+
 /// The demo project with a second view on V2 (a copy of V1) and microphones on A1 / A2.
 fn demo() -> Session {
     let mut s = Session::default();

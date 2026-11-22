@@ -11,7 +11,7 @@
 //! Settings are kept in `auto_cut.json` beside the preferences. Automation ids:
 //! `autoCut.fill`, `autoCut.add`, `autoCut.name.<n>`, `autoCut.video.<n>`, `autoCut.audio.<n>`,
 //! `autoCut.remove.<n>`, `autoCut.minShot`, `autoCut.reactions`, `autoCut.buildup`, `autoCut.hold`,
-//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.make`, `autoCut.cancel`.
+//! `autoCut.sound.<n>`, `autoCut.voice.<A1…>`, `autoCut.markers`, `autoCut.muteViews`, `autoCut.trim`, `autoCut.minSilence`, `autoCut.pad`, `autoCut.keep`, `autoCut.make`, `autoCut.cancel`.
 //!
 //! Kept in its own file so upstream FilmCraft updates rarely touch it.
 
@@ -57,6 +57,8 @@ pub struct Settings {
     pub trim: bool,
     pub min_silence: f64,
     pub pad: f64,
+    /// Percent of the length to keep once the dull parts go (100: off).
+    pub keep_percent: f64,
 }
 
 impl Default for Settings {
@@ -74,6 +76,7 @@ impl Default for Settings {
             trim: t.trim,
             min_silence: t.min_silence,
             pad: t.pad,
+            keep_percent: t.keep * 100.0,
         }
     }
 }
@@ -92,6 +95,7 @@ impl Settings {
         let mut s = path.and_then(read).unwrap_or_default();
         s.people.truncate(MAX_PEOPLE);
         s.voices.truncate(64);
+        s.keep_percent = if s.keep_percent.is_finite() { s.keep_percent.clamp(30.0, 100.0) } else { 80.0 };
         for v in [&mut s.min_shot, &mut s.buildup, &mut s.hold, &mut s.min_silence, &mut s.pad] {
             *v = if v.is_finite() { v.clamp(0.0, 30.0) } else { 0.0 };
         }
@@ -105,12 +109,19 @@ impl Settings {
             .filter(|r| !r.video.is_empty() && !r.audio.is_empty())
             .map(|r| json!({"name": if r.name.trim().is_empty() { r.video.clone() } else { r.name.trim().to_string() }, "video": r.video, "audio": r.audio, "sound": r.sound}))
             .collect();
-        json!({"people": people, "voices": self.voices, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "muteViews": self.mute_views, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad})
+        json!({"people": people, "voices": self.voices, "minShot": self.min_shot, "buildup": self.buildup, "hold": self.hold, "reactions": self.reactions, "markers": self.markers, "muteViews": self.mute_views, "trim": self.trim, "minSilence": self.min_silence, "pad": self.pad, "keep": self.keep_percent / 100.0})
     }
 }
 
 /// What the worker found: shots, big moments, silences to cut, and how much each person talks.
-type Planned = (Vec<Shot>, Vec<Reaction>, Vec<(usize, usize)>, Vec<f32>);
+type Planned = (Vec<Shot>, Vec<Reaction>, Cuts, Vec<f32>);
+
+/// Silences and dull parts to cut, in frames.
+#[derive(Clone, Debug, Default)]
+struct Cuts {
+    silences: Vec<(usize, usize)>,
+    dull: Vec<(usize, usize)>,
+}
 
 #[derive(Default)]
 struct Job {
@@ -202,7 +213,9 @@ fn start(app: &mut FilmcraftApp, st: &Settings) -> Result<(Arc<Mutex<Job>>, Valu
             .map_err(|e| e.to_string())?;
             let heard = ac::Heard::split(&lv, n, &extra);
             let (shots, reactions) = ac::plan(heard.people, &tuning);
-            let cuts = ac::silences(&heard, &tuning, &reactions, &keep);
+            let silences = ac::silences(&heard, &tuning, &reactions, &keep);
+            let dull = ac::dull_parts(&heard, &tuning, &reactions, &keep, &silences);
+            let cuts = Cuts { silences, dull };
             Ok((shots, reactions, cuts, ac::talk_share(heard.people)))
         }))
         .unwrap_or_else(|_| Err("the auto cut worker stopped unexpectedly".into()));
@@ -230,13 +243,24 @@ fn finish(app: &mut FilmcraftApp, result: Result<Planned, String>, req: Option<V
     let (s, r) = ac::shots_json(&shots, &reactions);
     req["shots"] = s;
     req["reactions"] = r;
-    req["cuts"] = ac::cuts_json(&cuts);
+    let secs = |v: &[(usize, usize)]| v.iter().map(|(a, b)| b.saturating_sub(*a)).sum::<usize>() as f64 * ac::FRAME;
+    let (quiet_secs, dull_secs) = (secs(&cuts.silences), secs(&cuts.dull));
+    let all: Vec<(usize, usize)> = cuts.silences.iter().chain(&cuts.dull).copied().collect();
+    req["cuts"] = ac::cuts_json(&all);
     let mut status = match app.session.execute("edit.autoCutPlace", req) {
         Ok(v) => {
             let mut m = tlf!("Auto Cut: {n} shots, {k} big moments marked", n = v["shots"].as_u64().unwrap_or(0), k = v["reactions"].as_u64().unwrap_or(0));
-            let secs = v["removed"].as_f64().unwrap_or(0.0);
-            if secs > 0.0 {
-                m.push_str(&format!(" · {}", tlf!("{n} silences cut ({secs} sec)", n = v["cuts"].as_u64().unwrap_or(0), secs = format!("{secs:.1}"))));
+            let removed = v["removed"].as_f64().unwrap_or(0.0);
+            if removed > 0.0 {
+                m.push_str(&format!(
+                    " · {}",
+                    tlf!(
+                        "removed {total} sec (silence {quiet} sec, dull parts {dull} sec)",
+                        total = format!("{removed:.1}"),
+                        quiet = format!("{quiet_secs:.1}"),
+                        dull = format!("{dull_secs:.1}")
+                    )
+                ));
             }
             if v["soundTracks"].as_u64().unwrap_or(0) == 0 {
                 m.push_str(&format!(" · {}", tl!("the views have no sound of their own linked (only microphones), so no Auto Cut audio track")));
@@ -393,6 +417,16 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         if st.settings.trim {
             num(app, ui, "autoCut.minSilence", tl!("Shortest silence to cut"), &mut st.settings.min_silence);
             num(app, ui, "autoCut.pad", tl!("Keep before and after words"), &mut st.settings.pad);
+            ui.horizontal(|ui| {
+                ui.label(tl!("Length to keep"));
+                let r = ui.add(egui::Slider::new(&mut st.settings.keep_percent, 30.0..=100.0).suffix("%").step_by(5.0));
+                app.auto.add_response("autoCut.keep", &r, tl!("Length to keep"));
+            });
+            ui.label(
+                RichText::new(tl!("Below 100%, the dullest talk goes too, cut between sentences. Lively talk, big moments and marked parts stay."))
+                    .small()
+                    .color(t.text_dim),
+            );
             ui.label(RichText::new(tl!("Every track is cut together, so the sound stays with the picture.")).small().color(t.text_dim));
         }
         ui.label(RichText::new(tl!("With In and Out marked, only that part is cut.")).small().color(t.text_dim));
