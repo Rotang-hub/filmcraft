@@ -375,7 +375,7 @@ fn finish(app: &mut FilmcraftApp, result: Result<Planned, String>, req: Option<V
 /// The game sound track, or "Auto" (empty): the view clip's linked sound.
 fn sound_combo(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, value: &mut String, names: &[String]) {
     let shown = if value.is_empty() { tl!("Auto").to_string() } else { value.clone() };
-    let r = craft_ui::ComboBox::from_id_salt(id.to_string()).width(64.0).selected_text(shown).show_ui(ui, |ui| {
+    let r = crate::legacy_dropdown::Dropdown::from_id_salt(id.to_string()).width(64.0).selected_text(shown).show_ui(ui, |ui| {
         ui.selectable_value(value, String::new(), tl!("Auto"));
         for n in names {
             ui.selectable_value(value, n.clone(), n);
@@ -386,7 +386,7 @@ fn sound_combo(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, value: &mut 
 
 fn track_combo(app: &mut FilmcraftApp, ui: &mut egui::Ui, id: &str, value: &mut String, names: &[String]) {
     let shown = if value.is_empty() { "—".to_string() } else { value.clone() };
-    let r = craft_ui::ComboBox::from_id_salt(id.to_string()).width(56.0).selected_text(shown).show_ui(ui, |ui| {
+    let r = crate::legacy_dropdown::Dropdown::from_id_salt(id.to_string()).width(56.0).selected_text(shown).show_ui(ui, |ui| {
         for n in names {
             ui.selectable_value(value, n.clone(), n);
         }
@@ -591,7 +591,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.horizontal(|ui| {
             ui.label(tl!("Edited sequence"));
             let shown = if st.settings.learn_from.is_empty() { tl!("Choose…").to_string() } else { st.settings.learn_from.clone() };
-            let r = craft_ui::ComboBox::from_id_salt("autoCut.learnFrom").width(160.0).selected_text(shown).show_ui(ui, |ui| {
+            let r = crate::legacy_dropdown::Dropdown::from_id_salt("autoCut.learnFrom").width(160.0).selected_text(shown).show_ui(ui, |ui| {
                 for n in &others {
                     ui.selectable_value(&mut st.settings.learn_from, n.clone(), n);
                 }

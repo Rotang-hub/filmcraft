@@ -42,7 +42,7 @@ fn unicode_to_byte() -> HashMap<char, u8> {
             n += 1;
         }
     }
-    // every code point here is below 0x200: none is a surrogate, so none is skipped
+    // Every code point here is below 0x200, so `from_u32` always succeeds.
     bs.iter().zip(&cs).filter_map(|(&b, &c)| char::from_u32(c).map(|ch| (ch, b as u8))).collect()
 }
 
@@ -176,6 +176,17 @@ pub fn group_words(tok: &Tokenizer, ids: &[u32]) -> Vec<(String, std::ops::Range
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_table_covers_every_byte_once() {
+        let t = unicode_to_byte();
+        assert_eq!(t.len(), 256);
+        let mut seen: Vec<u8> = t.values().copied().collect();
+        seen.sort_unstable();
+        assert!(seen.iter().copied().eq(0..=255u8));
+        assert_eq!(t.get(&'!'), Some(&b'!'));
+        assert_eq!(t.get(&'\u{120}'), Some(&b' '));
+    }
 
     #[test]
     fn sparse_huge_vocab_id_is_rejected_before_allocation() {

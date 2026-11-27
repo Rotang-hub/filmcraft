@@ -62,7 +62,10 @@ fn a_preset_goes_to_every_selected_clip() {
     }
     let (tx, rx) = channel();
     let app = FilmcraftApp::new(s).with_control(rx);
-    let harness = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000).build_eframe(move |_cc| app);
+    let harness = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000).build_eframe(move |cc| {
+        filmcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
+        app
+    });
     let mut d = Driver { harness, tx };
     d.frames(4);
     d.ok("ui.menu.invoke", json!({"id": "window.panel.Effects"}));

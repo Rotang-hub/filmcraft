@@ -56,7 +56,10 @@ fn a_plain_click_on_an_alt_isolated_clip_takes_its_links_again() {
     assert!(group.len() > 1);
     let (tx, rx) = channel();
     let app = FilmcraftApp::new(s).with_control(rx);
-    let harness = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000).build_eframe(move |_cc| app);
+    let harness = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000).build_eframe(move |cc| {
+        filmcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
+        app
+    });
     let mut d = Driver { harness, tx };
     d.frames(4);
     let id = format!("timeline.clip.{a}");

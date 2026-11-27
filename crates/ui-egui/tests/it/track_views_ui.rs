@@ -25,11 +25,14 @@ impl Driver {
         let (tx, rx) = channel();
         let app = FilmcraftApp::new(session).with_control(rx);
         let snapshots = std::env::var_os("FILMCRAFT_UI_SNAPSHOT_DIR").map(std::path::PathBuf::from);
-        let mut b = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000);
+        let mut b = Harness::builder().with_size(egui::vec2(1600.0, 1300.0)).with_max_steps(10_000);
         if snapshots.is_some() {
             b = b.wgpu();
         }
-        let harness = b.build_eframe(move |_cc| app);
+        let harness = b.build_eframe(move |cc| {
+            filmcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
+            app
+        });
         let mut d = Driver { harness, tx, snapshots };
         d.frames(4);
         d
@@ -101,6 +104,8 @@ fn a_view_button_shows_and_plays_only_its_tracks() {
     assert_eq!(d.view(), (vec![true, true, true], vec![true, true, true]));
     // "Use current tracks" assigns what is shown now
     d.ok("engine.execute", json!({"command": "timeline.setTrack", "params": {"track": "V1", "enabled": false}}));
+    d.frames(2);
+    assert!(!d.view().0[0], "V1 is hidden");
     d.click("trackViews.edit.2");
     d.click("trackViews.capture");
     d.click("trackViews.all");

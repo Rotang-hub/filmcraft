@@ -294,7 +294,7 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         ui.horizontal(|ui| {
             ui.label(tl!("Speech model"));
             let shown = models.iter().find(|m| m.0 == st.settings.model).map_or(st.settings.model.clone(), |m| m.1.to_string());
-            let r = craft_ui::ComboBox::from_id_salt("speakerCaptions.model").selected_text(shown).show_ui(ui, |ui| {
+            let r = crate::legacy_dropdown::Dropdown::from_id_salt("speakerCaptions.model").selected_text(shown).show_ui(ui, |ui| {
                 for (id, name, size, installed) in &models {
                     let label = format!("{name} ({} MB){}", size / 1_000_000, if *installed { " ✓" } else { "" });
                     ui.selectable_value(&mut st.settings.model, (*id).to_string(), label);

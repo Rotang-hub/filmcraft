@@ -64,11 +64,14 @@ fn make_auto_cut_builds_the_cut_track_from_the_views() {
     let (tx, rx) = channel();
     let app = FilmcraftApp::new(s).with_control(rx);
     let snapshots = std::env::var_os("FILMCRAFT_UI_SNAPSHOT_DIR").map(std::path::PathBuf::from);
-    let mut b = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_max_steps(10_000);
+    let mut b = Harness::builder().with_size(egui::vec2(1600.0, 1400.0)).with_max_steps(10_000);
     if snapshots.is_some() {
         b = b.wgpu();
     }
-    let harness = b.build_eframe(move |_cc| app);
+    let harness = b.build_eframe(move |cc| {
+        filmcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
+        app
+    });
     let mut d = Driver { harness, tx };
     d.frames(4);
     d.ok("ui.menu.invoke", json!({"id": "window.panel.AutoCut"}));
@@ -142,7 +145,10 @@ fn learning_from_an_edit_saves_a_style_that_the_cut_then_uses() {
     .unwrap();
     let (tx, rx) = channel();
     let app = FilmcraftApp::new(s).with_control(rx);
-    let harness = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).with_max_steps(10_000).build_eframe(move |_cc| app);
+    let harness = Harness::builder().with_size(egui::vec2(1600.0, 1400.0)).with_max_steps(10_000).build_eframe(move |cc| {
+        filmcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
+        app
+    });
     let mut d = Driver { harness, tx };
     d.frames(4);
     d.ok("ui.menu.invoke", json!({"id": "window.panel.AutoCut"}));

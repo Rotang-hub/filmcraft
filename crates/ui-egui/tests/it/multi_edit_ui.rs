@@ -60,7 +60,10 @@ fn effect_controls_changes_every_selected_clip() {
     let clips: Vec<u64> = s.active_sequence().unwrap().video_tracks[0].items.iter().map(|i| i.id.0).collect();
     let (tx, rx) = channel();
     let app = FilmcraftApp::new(s).with_control(rx);
-    let harness = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000).build_eframe(move |_cc| app);
+    let harness = Harness::builder().with_size(egui::vec2(1600.0, 980.0)).with_max_steps(10_000).build_eframe(move |cc| {
+        filmcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
+        app
+    });
     let mut d = Driver { harness, tx };
     d.frames(4);
     d.ok("engine.execute", json!({"command": "timeline.select", "params": {"clips": clips.clone()}}));

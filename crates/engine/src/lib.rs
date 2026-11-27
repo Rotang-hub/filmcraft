@@ -54,11 +54,13 @@ pub mod relink;
 pub mod remix;
 pub mod scene_detect;
 pub mod scopes;
+pub mod script_commands;
 pub mod sequence_extras;
 pub mod sequence_tools;
 pub mod settings;
 pub mod shortcut_presets;
 pub mod shortcuts;
+pub mod slip;
 pub mod source_monitor;
 pub mod speaker_captions;
 // Fork: reorder a clip's added effects.
@@ -68,6 +70,7 @@ pub mod auto_cut;
 pub mod auto_cut_motion;
 pub mod auto_cut_style;
 pub mod auto_cut_uncut;
+pub mod still_migration;
 pub mod sync;
 pub mod transcript;
 pub mod trim;
@@ -140,9 +143,15 @@ pub fn private_temp_dir() -> std::io::Result<std::path::PathBuf> {
             *cached = Some((path.clone(), None));
             return Ok(path);
         }
-        let mut dir = std::fs::DirBuilder::new();
+        // Owner-only on Unix. Elsewhere there's no mode to set, and a `mut` would be unused.
         #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
+        let dir = {
+            let mut dir = std::fs::DirBuilder::new();
+            std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
+            dir
+        };
+        #[cfg(not(unix))]
+        let dir = std::fs::DirBuilder::new();
         // `create` fails when the name exists, so a folder someone else made is never accepted
         match dir.create(&path) {
             Ok(()) => {
@@ -178,6 +187,15 @@ pub type Result<T> = std::result::Result<T, EngineError>;
 /// Host services (file access, clipboard…) injected by the frontend.
 pub trait Services: Send + Sync {
     fn read_file(&self, path: &str) -> std::io::Result<Vec<u8>>;
+    /// Read a whole file, refusing one over `max` bytes. Hosts that can read natively override
+    /// this so an oversize file is refused before its bytes fill memory.
+    fn read_file_bounded(&self, path: &str, max: u64) -> std::io::Result<Vec<u8>> {
+        let bytes = self.read_file(path)?;
+        if bytes.len() as u64 > max {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{path}: {} bytes is over the {max} byte limit", bytes.len())));
+        }
+        Ok(bytes)
+    }
     fn write_file(&self, path: &str, data: &[u8]) -> std::io::Result<()>;
     /// Publish a complete new file only when the final path is unoccupied. Publication must
     /// reject a concurrent collision; a prior existence check alone is insufficient.
@@ -239,6 +257,9 @@ pub struct FsServices;
 impl Services for FsServices {
     fn read_file(&self, path: &str) -> std::io::Result<Vec<u8>> {
         filmcraft_media::reader::read_regular_file(std::path::Path::new(path))
+    }
+    fn read_file_bounded(&self, path: &str, max: u64) -> std::io::Result<Vec<u8>> {
+        filmcraft_media::reader::read_regular_file_bounded(std::path::Path::new(path), max)
     }
     fn write_file(&self, path: &str, data: &[u8]) -> std::io::Result<()> {
         // Atomic + durable: temp file in the same directory, fsync, rename, fsync the directory.
@@ -509,6 +530,8 @@ pub enum Event {
     },
     OpenSequence(ItemId),
     OpenSource(ItemId),
+    /// Show the source monitor while retaining the panel that requested the cue.
+    CueSource(ItemId),
     /// Show this item in the Project panel (Reveal in Project).
     RevealInProject(ItemId),
 }
@@ -762,7 +785,7 @@ impl Session {
             return;
         }
         if dirty {
-            p.send_dirty(self.project.clone(), self.revision, self.path.clone());
+            p.send_dirty(self.project.clone(), self.media.clone(), self.revision, self.path.clone());
         } else {
             p.send_clean();
         }
@@ -1399,7 +1422,7 @@ pub fn media_duration(p: &Project, _pool: &MediaPool, id: ItemId) -> Option<Tick
                 id = *parent;
                 continue;
             }
-            filmcraft_project::ItemKind::AdjustmentLayer { .. } | filmcraft_project::ItemKind::Graphic { .. } => None,
+            filmcraft_project::ItemKind::AdjustmentLayer { .. } | filmcraft_project::ItemKind::Graphic { .. } | filmcraft_project::ItemKind::Script(_) => None,
         };
     }
     None
@@ -1517,7 +1540,11 @@ mod settings_tests;
 #[cfg(test)]
 mod shortcuts_tests;
 #[cfg(test)]
+mod slip_tests;
+#[cfg(test)]
 mod split_edit_ripple_trim_tests;
+#[cfg(test)]
+mod still_migration_tests;
 #[cfg(test)]
 mod stored_paths_tests;
 #[cfg(test)]
