@@ -14,7 +14,7 @@ use craft_host::target::Backend;
 use craft_host::target::ShellInfo;
 use craft_host::{AppInfo, Host};
 use craft_keymap::Overrides;
-use craft_theme::Mode;
+use craft_theme::{Mode, ThemeDef};
 use craft_ui::InstallSpec;
 use craft_ui::fonts::{I18nScripts, UiFonts};
 use craft_ui::runtime::commands::{CommandInput, CommandSet as _, NavCommand};
@@ -81,10 +81,62 @@ pub fn install_headless_with(ctx: &Context, system: Arc<dyn WindowSystem>) {
 pub fn before_input(ctx: &Context, app: &FilmcraftApp) {
     let mode = if app.ui.dark { Mode::Dark } else { Mode::Light };
     let root = RootEnv::new().mode(mode).scale(Scale::new(ctx.zoom_factor()));
+    let root = match chrome_theme(&app.tokens) {
+        Some(def) => root.library_theme(def),
+        None => root,
+    };
     let window_input = if app.control_input_only { WindowInput::Dropped } else { WindowInput::Live };
     embed::before_input(ctx, |_output| {
         FrameInput::new(root).commands(CommandInput::new().overrides(Arc::clone(&OVERRIDES))).host(Arc::clone(&HOST)).window_input(window_input)
     });
+}
+
+/// The theme the runtime draws the dock's chrome in (tab strips, the gaps between panels, its menus): the suite's
+/// Pro theme with its surfaces, lines, states and text pinned to FilmCraft's own tokens, in both modes, so the dock
+/// keeps the app's colours (a black gap, dark tab strips) instead of the suite default's lighter greys. Built again
+/// only when the tokens change.
+fn chrome_theme(t: &crate::theme::Tokens) -> Option<Arc<ThemeDef>> {
+    static CACHE: std::sync::Mutex<Option<(Vec<egui::Color32>, Arc<ThemeDef>)>> = std::sync::Mutex::new(None);
+    let pins: [(&str, egui::Color32); 17] = [
+        ("surface.background", t.app_bg),
+        ("surface.canvas", t.panel_bg),
+        ("surface.panel", t.tab_bg),
+        ("surface.raised", t.tab_bg),
+        ("surface.sunken", t.panel_bg),
+        ("line.border", t.separator),
+        ("line.divider", t.separator),
+        ("line.control_edge", t.field_border),
+        ("line.focus", t.focus),
+        ("state.hover", t.hover),
+        ("state.pressed", t.pressed),
+        ("state.selected", t.pressed),
+        ("text.normal", t.tab_text_active),
+        ("text.muted", t.tab_text),
+        ("text.faint", t.text_faint),
+        ("accent.solid", t.focus),
+        ("text.on_accent", t.tab_text_active),
+    ];
+    let key: Vec<egui::Color32> = pins.iter().map(|(_, c)| *c).collect();
+    let mut cache = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((k, def)) = cache.as_ref()
+        && *k == key
+    {
+        return Some(Arc::clone(def));
+    }
+    let themes = craft_theme::builtins();
+    let mut def = themes.iter().find(|d| d.id.as_str() == "craft.pro").or_else(|| themes.first()).cloned()?;
+    if let Ok(id) = craft_theme::ThemeId::parse("filmcraft.chrome") {
+        def.id = id;
+    }
+    for (path, c) in pins {
+        let Some(token) = craft_theme::ColorToken::from_path(path) else { continue };
+        let rgba = craft_theme::Rgba([c.r(), c.g(), c.b(), c.a()]);
+        def.pins.light.colors.insert(token, rgba);
+        def.pins.dark.colors.insert(token, rgba);
+    }
+    let def = Arc::new(def);
+    *cache = Some((key, Arc::clone(&def)));
+    Some(def)
 }
 
 /// How many events of one frame's raw input came after its first pointer press: the runtime gives a pass at most one
