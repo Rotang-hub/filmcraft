@@ -92,18 +92,18 @@ pub fn before_input(ctx: &Context, app: &FilmcraftApp) {
 }
 
 /// The theme the runtime draws the dock's chrome in (tab strips, the gaps between panels, its menus): the suite's
-/// Pro theme with its surfaces, lines, states and text pinned to FilmCraft's own tokens, in both modes, so the dock
-/// keeps the app's colours (a black gap, dark tab strips) instead of the suite default's lighter greys. Built again
-/// only when the tokens change.
+/// Pro theme with its surfaces, lines, states and text pinned to FilmCraft's own tokens, in both modes. The tab
+/// strips sit on `surface.background`, so that is the tab colour (the panels' grey); the thin gaps between panels
+/// are drawn in `line.border`, so that is the app background. Built again only when the tokens change.
 fn chrome_theme(t: &crate::theme::Tokens) -> Option<Arc<ThemeDef>> {
     static CACHE: std::sync::Mutex<Option<(Vec<egui::Color32>, Arc<ThemeDef>)>> = std::sync::Mutex::new(None);
     let pins: [(&str, egui::Color32); 17] = [
-        ("surface.background", t.app_bg),
+        ("surface.background", t.tab_bg),
         ("surface.canvas", t.panel_bg),
         ("surface.panel", t.tab_bg),
         ("surface.raised", t.tab_bg),
         ("surface.sunken", t.panel_bg),
-        ("line.border", t.separator),
+        ("line.border", t.app_bg),
         ("line.divider", t.separator),
         ("line.control_edge", t.field_border),
         ("line.focus", t.focus),
